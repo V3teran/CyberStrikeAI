@@ -458,7 +458,9 @@ func (m *ExternalMCPManager) CallTool(ctx context.Context, toolName string, args
 
 	execCtx, runCancel := context.WithCancel(ctx)
 	m.registerRunningCancel(executionID, runCancel)
+	notifyToolRunBegin(ctx, executionID)
 	defer func() {
+		notifyToolRunEnd(ctx, executionID)
 		runCancel()
 		m.unregisterRunningCancel(executionID)
 	}()

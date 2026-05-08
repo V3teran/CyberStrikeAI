@@ -803,7 +803,9 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 
 	execCtx, runCancel := context.WithCancel(ctx)
 	s.registerRunningCancel(executionID, runCancel)
+	notifyToolRunBegin(ctx, executionID)
 	defer func() {
+		notifyToolRunEnd(ctx, executionID)
 		runCancel()
 		s.unregisterRunningCancel(executionID)
 	}()

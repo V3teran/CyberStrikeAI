@@ -883,6 +883,49 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 	return finalResult, executionID, nil
 }
 
+// RecordCompletedToolInvocation 将已在其它路径完成的工具调用写入监控存储（格式与 CallTool 结束后一致），
+// 用于 Eino ADK filesystem execute 等未经过 CallTool 的场景；返回 executionId 供助手消息 mcpExecutionIds 关联。
+func (s *Server) RecordCompletedToolInvocation(toolName string, args map[string]interface{}, resultText string, invokeErr error) string {
+	if s == nil {
+		return ""
+	}
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	executionID := uuid.New().String()
+	now := time.Now()
+	failed := invokeErr != nil
+	exec := &ToolExecution{
+		ID:        executionID,
+		ToolName:  toolName,
+		Arguments: args,
+		StartTime: now,
+		EndTime:   &now,
+		Duration:  0,
+	}
+	if failed {
+		exec.Status = "failed"
+		exec.Error = invokeErr.Error()
+		if strings.TrimSpace(resultText) != "" {
+			exec.Result = &ToolResult{Content: []Content{{Type: "text", Text: resultText}}}
+		}
+	} else {
+		exec.Status = "completed"
+		text := resultText
+		if strings.TrimSpace(text) == "" {
+			text = "（无输出）"
+		}
+		exec.Result = &ToolResult{Content: []Content{{Type: "text", Text: text}}}
+	}
+	if s.storage != nil {
+		if err := s.storage.SaveToolExecution(exec); err != nil {
+			s.logger.Warn("RecordCompletedToolInvocation 保存失败", zap.Error(err))
+		}
+	}
+	s.updateStats(toolName, failed)
+	return executionID
+}
+
 // cleanupOldExecutions 清理旧的执行记录，防止内存无限增长
 func (s *Server) cleanupOldExecutions() {
 	if len(s.executions) <= s.maxExecutionsInMemory {

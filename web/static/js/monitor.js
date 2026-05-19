@@ -410,6 +410,34 @@ if (typeof window !== 'undefined') {
     window.normalizeStreamingDeltaJs = normalizeStreamingDeltaJs;
 }
 
+/**
+ * SSE data.accumulated：服务端权威流式全文。有则直接用作 buffer，避免双端 normalize 叠字。
+ * @param {object|null|undefined} data
+ * @returns {string|null} 有快照时返回全文；否则 null（回退 delta 归一化）
+ */
+function streamBufferFromAccumulated(data) {
+    if (!data || data.accumulated == null) {
+        return null;
+    }
+    return String(data.accumulated);
+}
+
+/**
+ * @returns {string} 合并后的 buffer
+ */
+function mergeStreamBuffer(current, delta, data) {
+    const acc = streamBufferFromAccumulated(data);
+    if (acc !== null) {
+        return acc;
+    }
+    return normalizeStreamingDeltaJs(current, delta)[0];
+}
+
+if (typeof window !== 'undefined') {
+    window.streamBufferFromAccumulated = streamBufferFromAccumulated;
+    window.mergeStreamBuffer = mergeStreamBuffer;
+}
+
 /** 流式 delta：纯文本，避免每条全量 marked + DOMPurify */
 function setTimelineItemContentStreamPlain(contentEl, text) {
     if (!contentEl) return;
@@ -1411,8 +1439,7 @@ function handleStreamEvent(event, progressElement, progressId,
             const s = state.get(streamId);
 
             const delta = event.message || '';
-            const merged = normalizeStreamingDeltaJs(s.buffer, delta);
-            s.buffer = merged[0];
+            s.buffer = mergeStreamBuffer(s.buffer, delta, d);
 
             const item = document.getElementById(s.itemId);
             if (item) {
@@ -1710,12 +1737,11 @@ function handleStreamEvent(event, progressElement, progressId,
             const streamId = d.streamId || null;
             if (!streamId) break;
             const delta = event.message || '';
-            if (!delta) break;
+            if (!delta && streamBufferFromAccumulated(d) === null) break;
             const stateMap = einoAgentReplyStreamStateByProgressId.get(progressId);
             if (!stateMap || !stateMap.has(streamId)) break;
             const s = stateMap.get(streamId);
-            const merged = normalizeStreamingDeltaJs(s.buffer, delta);
-            s.buffer = merged[0];
+            s.buffer = mergeStreamBuffer(s.buffer, delta, d);
             const item = document.getElementById(s.itemId);
             if (item) {
                 let contentEl = item.querySelector('.timeline-item-content');
@@ -1901,8 +1927,8 @@ function handleStreamEvent(event, progressElement, progressId,
             }
 
             const deltaContent = event.message || '';
-            const mergedResp = normalizeStreamingDeltaJs(state.buffer, deltaContent);
-            state.buffer = mergedResp[0];
+            if (!deltaContent && streamBufferFromAccumulated(responseData) === null) break;
+            state.buffer = mergeStreamBuffer(state.buffer, deltaContent, responseData);
 
             // 更新时间线条目内容
             if (state.itemId) {

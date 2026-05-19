@@ -2924,11 +2924,16 @@ function runWebshellAiSend(conn, inputEl, sendBtn, messagesContainer) {
                         messagesContainer.scrollTop = messagesContainer.scrollHeight;
                     } else if (_et === 'response_delta') {
                         var deltaText = (_em != null && _em !== '') ? String(_em) : '';
-                        if (deltaText) {
-                            var normR = (typeof window.normalizeStreamingDeltaJs === 'function')
-                                ? window.normalizeStreamingDeltaJs(streamingTarget, deltaText)
-                                : [streamingTarget + deltaText, deltaText];
-                            streamingTarget = normR[0];
+                        var mergeBuf = (typeof window.mergeStreamBuffer === 'function')
+                            ? window.mergeStreamBuffer
+                            : function (cur, dlt) {
+                                var normR = (typeof window.normalizeStreamingDeltaJs === 'function')
+                                    ? window.normalizeStreamingDeltaJs(cur, dlt)
+                                    : [cur + dlt, dlt];
+                                return normR[0];
+                            };
+                        if (deltaText || (_ed && _ed.accumulated != null)) {
+                            streamingTarget = mergeBuf(streamingTarget, deltaText, _ed);
                             webshellStreamingTypingId += 1;
                             streamingTypingId = webshellStreamingTypingId;
                             runWebshellAiStreamingTyping(assistantDiv, streamingTarget, streamingTypingId, messagesContainer);
@@ -3001,12 +3006,17 @@ function runWebshellAiSend(conn, inputEl, sendBtn, messagesContainer) {
                         wsThinkingStreams.set(_ed.streamId, { el: thinkSItem, body: thinkSPre, buf: '' });
                         }
                         if (!streamingTarget) assistantDiv.textContent = '…';
-                    } else if ((_et === 'thinking_stream_delta' || _et === 'reasoning_chain_stream_delta') && _ed.streamId) {
+                    } else if ((_et === 'thinking_stream_delta' || _et === 'reasoning_chain_stream_delta') && _ed && _ed.streamId) {
                         var tsD = wsThinkingStreams.get(_ed.streamId);
                         if (tsD) {
-                            var normT = (typeof window.normalizeStreamingDeltaJs === 'function')
-                                ? window.normalizeStreamingDeltaJs(tsD.buf, _em || '') : [tsD.buf + (_em || ''), _em || ''];
-                            tsD.buf = normT[0];
+                            var mergeThink = (typeof window.mergeStreamBuffer === 'function')
+                                ? window.mergeStreamBuffer
+                                : function (cur, dlt) {
+                                    var normT = (typeof window.normalizeStreamingDeltaJs === 'function')
+                                        ? window.normalizeStreamingDeltaJs(cur, dlt) : [cur + dlt, dlt];
+                                    return normT[0];
+                                };
+                            tsD.buf = mergeThink(tsD.buf, _em || '', _ed);
                             if (typeof formatMarkdown === 'function') {
                                 tsD.body.innerHTML = formatMarkdown(tsD.buf);
                             } else {
@@ -3136,9 +3146,14 @@ function runWebshellAiSend(conn, inputEl, sendBtn, messagesContainer) {
                     } else if (_et === 'eino_agent_reply_stream_delta' && _ed.streamId) {
                         var stD = einoSubReplyStreams.get(_ed.streamId);
                         if (stD) {
-                            var normS = (typeof window.normalizeStreamingDeltaJs === 'function')
-                                ? window.normalizeStreamingDeltaJs(stD.buf, _em || '') : [stD.buf + (_em || ''), _em || ''];
-                            stD.buf = normS[0];
+                            var mergeSub = (typeof window.mergeStreamBuffer === 'function')
+                                ? window.mergeStreamBuffer
+                                : function (cur, dlt) {
+                                    var normS = (typeof window.normalizeStreamingDeltaJs === 'function')
+                                        ? window.normalizeStreamingDeltaJs(cur, dlt) : [cur + dlt, dlt];
+                                    return normS[0];
+                                };
+                            stD.buf = mergeSub(stD.buf, _em || '', _ed);
                             var preD = stD.el.querySelector('.webshell-eino-reply-stream-body');
                             if (!preD) {
                                 preD = document.createElement('pre');

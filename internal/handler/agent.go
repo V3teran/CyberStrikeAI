@@ -23,6 +23,7 @@ import (
 	"cyberstrike-ai/internal/mcp"
 	"cyberstrike-ai/internal/mcp/builtin"
 	"cyberstrike-ai/internal/multiagent"
+	"cyberstrike-ai/internal/openai"
 
 	"github.com/gin-gonic/gin"
 	"github.com/robfig/cron/v3"
@@ -1158,7 +1159,16 @@ func (h *AgentHandler) createProgressCallback(runCtx context.Context, cancelRun 
 			return
 		}
 		if eventType == "response_delta" {
-			respPlan.b.WriteString(message)
+			if dataMap, ok := data.(map[string]interface{}); ok {
+				if acc, okAcc := dataMap[openai.SSEAccumulatedKey].(string); okAcc {
+					respPlan.b.Reset()
+					respPlan.b.WriteString(acc)
+				} else {
+					respPlan.b.WriteString(message)
+				}
+			} else {
+				respPlan.b.WriteString(message)
+			}
 			if dataMap, ok := data.(map[string]interface{}); ok && respPlan.meta == nil {
 				respPlan.meta = make(map[string]interface{}, len(dataMap))
 				for k, v := range dataMap {
@@ -1213,8 +1223,12 @@ func (h *AgentHandler) createProgressCallback(runCtx context.Context, cancelRun 
 					} else if tb.persistAs == "" {
 						tb.persistAs = persistAs
 					}
-					// delta 片段直接拼接
-					tb.b.WriteString(message)
+					if acc, okAcc := dataMap[openai.SSEAccumulatedKey].(string); okAcc {
+						tb.b.Reset()
+						tb.b.WriteString(acc)
+					} else {
+						tb.b.WriteString(message)
+					}
 					// 有时 delta 先到 start 未到，补充元信息
 					for k, v := range dataMap {
 						tb.meta[k] = v

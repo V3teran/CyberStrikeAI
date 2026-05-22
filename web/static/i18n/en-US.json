@@ -1531,6 +1531,7 @@
     "confirmDelete": "Delete this file?",
     "editTitle": "Edit file",
     "renameTitle": "Rename",
+    "renameCurrentFile": "Current file",
     "newFileName": "New file name",
     "empty": "No chat uploads yet",
     "errorLoad": "Failed to load",

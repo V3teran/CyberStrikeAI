@@ -1520,6 +1520,7 @@
     "confirmDelete": "确定删除该文件？",
     "editTitle": "编辑文件",
     "renameTitle": "重命名",
+    "renameCurrentFile": "当前文件",
     "newFileName": "新文件名",
     "empty": "暂无对话附件",
     "errorLoad": "加载失败",

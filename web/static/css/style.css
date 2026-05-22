@@ -20223,9 +20223,66 @@ button.chat-files-dropdown-item:hover:not(:disabled) {
     width: 100%;
 }
 
+/* 文件管理：重命名 / 新建文件夹 — 紧凑表单弹窗，无全局紫色标题条 */
+.chat-files-form-modal {
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+}
+
+.chat-files-form-modal-content {
+    width: 100%;
+    max-width: 420px;
+    margin: 0;
+    border-radius: 12px;
+    box-shadow:
+        0 16px 48px rgba(15, 23, 42, 0.14),
+        0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.chat-files-form-modal-header {
+    padding: 18px 24px !important;
+    border-bottom: 1px solid var(--border-color) !important;
+    background: var(--bg-primary) !important;
+}
+
+.chat-files-form-modal-header::after {
+    display: none !important;
+}
+
+.chat-files-form-modal-header h2 {
+    font-size: 1.0625rem !important;
+    font-weight: 600 !important;
+    color: var(--text-primary) !important;
+    background: none !important;
+    -webkit-background-clip: unset !important;
+    -webkit-text-fill-color: var(--text-primary) !important;
+    background-clip: unset !important;
+    letter-spacing: -0.02em !important;
+}
+
+.chat-files-form-modal-header h2::before {
+    display: none !important;
+}
+
+.chat-files-form-modal-close {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 1.25rem !important;
+    border-radius: 8px !important;
+    border: none !important;
+}
+
+.chat-files-form-modal-close:hover {
+    background: var(--bg-secondary) !important;
+    color: var(--text-primary) !important;
+    transform: none !important;
+    border-color: transparent !important;
+}
+
 /* 新建文件夹弹窗：层次清晰、留白舒适，无强装饰 */
 .chat-files-mkdir-modal-content {
-    max-width: 480px;
+    max-width: 420px;
 }
 
 .chat-files-mkdir-body {

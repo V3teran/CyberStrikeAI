@@ -2998,30 +2998,39 @@
         </div>
     </div>
 
-    <div id="chat-files-rename-modal" class="modal">
-        <div class="modal-content" style="max-width: 480px;">
-            <div class="modal-header">
+    <div id="chat-files-rename-modal" class="modal chat-files-form-modal">
+        <div class="modal-content chat-files-form-modal-content chat-files-mkdir-modal-content">
+            <div class="modal-header chat-files-form-modal-header">
                 <h2 data-i18n="chatFilesPage.renameTitle">重命名</h2>
-                <span class="modal-close" onclick="closeChatFilesRenameModal()">&times;</span>
+                <span class="modal-close chat-files-form-modal-close" onclick="closeChatFilesRenameModal()" aria-label="Close">&times;</span>
             </div>
-            <div class="modal-body">
-                <label class="chat-files-rename-label">
-                    <span data-i18n="chatFilesPage.newFileName">新文件名</span>
-                    <input type="text" id="chat-files-rename-input" class="form-control" />
+            <div class="modal-body chat-files-mkdir-body">
+                <div class="chat-files-mkdir-location">
+                    <div class="chat-files-mkdir-location-caption" data-i18n="chatFilesPage.renameCurrentFile">当前文件</div>
+                    <div class="chat-files-mkdir-path-box">
+                        <code class="chat-files-mkdir-path" id="chat-files-rename-path-hint"></code>
+                    </div>
+                </div>
+                <label class="chat-files-rename-label chat-files-mkdir-label">
+                    <span class="chat-files-mkdir-field-name">
+                        <svg class="chat-files-mkdir-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        <span data-i18n="chatFilesPage.newFileName">新文件名</span>
+                    </span>
+                    <input type="text" id="chat-files-rename-input" class="form-control chat-files-mkdir-input" autocomplete="off" />
                 </label>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn-secondary" onclick="closeChatFilesRenameModal()" data-i18n="common.cancel">取消</button>
-                <button type="button" class="btn-primary" onclick="submitChatFilesRename()" data-i18n="common.ok">确定</button>
+            <div class="modal-footer chat-files-mkdir-footer">
+                <button type="button" class="btn-secondary chat-files-mkdir-btn-cancel" onclick="closeChatFilesRenameModal()" data-i18n="common.cancel">取消</button>
+                <button type="button" class="btn-primary chat-files-mkdir-btn-submit" onclick="submitChatFilesRename()" data-i18n="common.ok">确定</button>
             </div>
         </div>
     </div>
 
-    <div id="chat-files-mkdir-modal" class="modal">
-        <div class="modal-content chat-files-mkdir-modal-content">
-            <div class="modal-header">
+    <div id="chat-files-mkdir-modal" class="modal chat-files-form-modal">
+        <div class="modal-content chat-files-form-modal-content chat-files-mkdir-modal-content">
+            <div class="modal-header chat-files-form-modal-header">
                 <h2 data-i18n="chatFilesPage.newFolderTitle">新建文件夹</h2>
-                <span class="modal-close" onclick="closeChatFilesMkdirModal()">&times;</span>
+                <span class="modal-close chat-files-form-modal-close" onclick="closeChatFilesMkdirModal()" aria-label="Close">&times;</span>
             </div>
             <div class="modal-body chat-files-mkdir-body">
                 <div class="chat-files-mkdir-location" aria-live="polite">

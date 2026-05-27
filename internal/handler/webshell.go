@@ -134,6 +134,16 @@ func quoteCmdPath(p string) string {
 	return "\"" + strings.ReplaceAll(p, "\"", "\"\"") + "\""
 }
 
+// normalizeWindowsCmdPath 把前端统一的 "/" 路径转换为 cmd 更稳定识别的 "\"。
+// 仅用于 Windows 命令构造，不改变语义（例如 "." / ".." 会保持不变）。
+func normalizeWindowsCmdPath(p string) string {
+	s := strings.TrimSpace(p)
+	if s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, "/", "\\")
+}
+
 // quotePsSingle 把字符串按 PowerShell 单引号字符串规则转义（内部 ' → ''）。
 // 供 PowerShell 脚本参数使用，全脚本只用单引号，外层 cmd 再用双引号包裹即可安全传递。
 func quotePsSingle(s string) string {
@@ -198,6 +208,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			p = "."
 		}
 		if targetOS == "windows" {
+			p = normalizeWindowsCmdPath(p)
 			return "dir /a " + quoteCmdPath(p), nil
 		}
 		return "ls -la " + quoteShellSinglePosix(p), nil
@@ -207,6 +218,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			return "", errFileOpPathRequired
 		}
 		if targetOS == "windows" {
+			path = normalizeWindowsCmdPath(path)
 			return "type " + quoteCmdPath(path), nil
 		}
 		return "cat " + quoteShellSinglePosix(path), nil
@@ -216,6 +228,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			return "", errFileOpPathRequired
 		}
 		if targetOS == "windows" {
+			path = normalizeWindowsCmdPath(path)
 			return "del /q /f " + quoteCmdPath(path), nil
 		}
 		return "rm -f " + quoteShellSinglePosix(path), nil
@@ -225,6 +238,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			return "", errFileOpPathRequired
 		}
 		if targetOS == "windows" {
+			path = normalizeWindowsCmdPath(path)
 			// cmd 的 md 默认会自动创建中间目录（等价于 Linux 的 mkdir -p）
 			return "md " + quoteCmdPath(path), nil
 		}
@@ -237,6 +251,8 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			return "", errFileOpRenameNeedsBothPaths
 		}
 		if targetOS == "windows" {
+			oldPath = normalizeWindowsCmdPath(oldPath)
+			newPath = normalizeWindowsCmdPath(newPath)
 			return "move /y " + quoteCmdPath(oldPath) + " " + quoteCmdPath(newPath), nil
 		}
 		return "mv -f " + quoteShellSinglePosix(oldPath) + " " + quoteShellSinglePosix(newPath), nil
@@ -249,6 +265,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 		// 这样既能写入任意二进制/含引号的文本，又避免各家 shell 的转义地狱。
 		b64 := base64.StdEncoding.EncodeToString([]byte(in.Content))
 		if targetOS == "windows" {
+			path = normalizeWindowsCmdPath(path)
 			return buildWindowsPowerShellWrite(path, b64), nil
 		}
 		return "echo '" + b64 + "' | base64 -d > " + quoteShellSinglePosix(path), nil
@@ -261,6 +278,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			return "", errFileOpUploadTooLarge
 		}
 		if targetOS == "windows" {
+			path = normalizeWindowsCmdPath(path)
 			return buildWindowsPowerShellWrite(path, in.Content), nil
 		}
 		return "echo '" + in.Content + "' | base64 -d > " + quoteShellSinglePosix(path), nil
@@ -270,6 +288,7 @@ func (h *WebShellHandler) buildFileCommand(in fileCommandInput) (string, error) 
 			return "", errFileOpPathRequired
 		}
 		if targetOS == "windows" {
+			path = normalizeWindowsCmdPath(path)
 			if in.ChunkIndex == 0 {
 				return buildWindowsPowerShellWrite(path, in.Content), nil
 			}

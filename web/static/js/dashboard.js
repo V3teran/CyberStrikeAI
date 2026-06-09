@@ -394,7 +394,6 @@ async function refreshDashboard() {
         renderRecentVulns(recentVulnsRes);
         dashboardState.lastProjectSummary = projectSummaryRes;
         renderRecentFacts(projectSummaryRes);
-        updateDashboardFeedTabBadge(projectSummaryRes);
 
         // External MCP 健康度（同时拿到 down 数喂给 alert banner / 推荐操作）
         var externalMcpDown = renderExternalMcpHealth(externalMcpStatsRes);
@@ -1168,19 +1167,6 @@ function updateDashboardFeedViewAll(tab) {
         link.onclick = function () { try { switchPage('projects'); } catch (_) {} };
     } else {
         link.onclick = function () { try { switchPage('vulnerabilities'); } catch (_) {} };
-    }
-}
-
-function updateDashboardFeedTabBadge(summaryRes) {
-    var badge = document.getElementById('dashboard-feed-tab-facts-badge');
-    if (!badge) return;
-    var facts = (summaryRes && Array.isArray(summaryRes.recent_facts)) ? summaryRes.recent_facts.length : 0;
-    if (facts > 0) {
-        badge.hidden = false;
-        badge.textContent = '(' + facts + ')';
-    } else {
-        badge.hidden = true;
-        badge.textContent = '';
     }
 }
 

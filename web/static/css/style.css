@@ -16010,18 +16010,6 @@ tr.mcp-stats-tool-row[data-tool-name]:focus-visible {
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 
-.dashboard-feed-tab-badge {
-    margin-left: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #64748b;
-    font-variant-numeric: tabular-nums;
-}
-
-.dashboard-feed-tab.is-active .dashboard-feed-tab-badge {
-    color: #0066ff;
-}
-
 .dashboard-feed-tab:focus-visible {
     outline: 2px solid rgba(0, 102, 255, 0.45);
     outline-offset: 2px;

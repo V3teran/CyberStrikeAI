@@ -67,6 +67,17 @@ RUN chmod +x ./install-tools.sh /usr/local/bin/docker-entrypoint.sh \
     && pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>/dev/null || true \
     && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 
+# 补齐 install-tools.sh 工具表覆盖不到 / 装错的工具：
+#  - 真·projectdiscovery 工具（katana 被 pip 同名库顶替、nuclei 表项缺 go 路径 → 用 go install 锁版本覆盖）
+#  - gdb（headless 元包未含）、dirsearch/paramspider（pip）、feroxbuster/rustscan（Rust，用 apt）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gdb feroxbuster 2>/dev/null; \
+    rm -f /usr/local/bin/katana; \
+    GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1 || true; \
+    GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.9.0 || true; \
+    pip3 install --break-system-packages --no-cache-dir dirsearch 'git+https://github.com/devanshbatham/paramspider.git' 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
+
 RUN mkdir -p runtime-config data tmp \
     && ln -s /app/runtime-config/config.yaml /app/config.yaml
 

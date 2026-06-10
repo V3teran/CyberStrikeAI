@@ -75,7 +75,10 @@ RUN apt-get update \
     rm -f /usr/local/bin/katana; \
     GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1 || true; \
     GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.9.0 || true; \
-    pip3 install --break-system-packages --no-cache-dir dirsearch 'git+https://github.com/devanshbatham/paramspider.git' 2>/dev/null || true; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/devanshbatham/paramspider.git' 2>/dev/null || true; \
+    (git clone --depth 1 https://github.com/maurosoria/dirsearch.git /opt/dirsearch \
+        && printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
+        && chmod +x /opt/cyberstrike/bin/dirsearch) 2>/dev/null || true; \
     (cd /tmp && curl -sSL -o rustscan.deb.zip https://github.com/bee-san/RustScan/releases/download/2.4.1/rustscan.deb.zip \
         && unzip -o rustscan.deb.zip && dpkg -i rustscan_2.4.1-1_amd64.deb && rm -f rustscan*.zip rustscan*.deb rustscan.tmp0-stripped) 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true

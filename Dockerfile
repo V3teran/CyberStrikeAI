@@ -81,6 +81,14 @@ RUN apt-get update \
         && chmod +x /opt/cyberstrike/bin/dirsearch) 2>/dev/null || true; \
     (cd /tmp && curl -sSL -o rustscan.deb.zip https://github.com/bee-san/RustScan/releases/download/2.4.1/rustscan.deb.zip \
         && unzip -o rustscan.deb.zip && dpkg -i rustscan_2.4.1-1_amd64.deb && rm -f rustscan*.zip rustscan*.deb rustscan.tmp0-stripped) 2>/dev/null || true; \
+    (cd /tmp && curl -fsSL -o fscan https://github.com/shadow1ng/fscan/releases/download/v2.1.3/fscan_2.1.3_linux_x64 \
+        && chmod +x fscan && mv fscan /opt/cyberstrike/bin/fscan) 2>/dev/null || true; \
+    (git clone --depth 1 https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool \
+        && pip3 install --break-system-packages --no-cache-dir -r /opt/jwt_tool/requirements.txt 2>/dev/null; \
+        printf '#!/bin/sh\nexec python3 /opt/jwt_tool/jwt_tool.py "$@"\n' > /opt/cyberstrike/bin/jwt_tool \
+        && chmod +x /opt/cyberstrike/bin/jwt_tool) 2>/dev/null || true; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/swisskyrepo/GraphQLmap.git' 2>/dev/null || true; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install zapcli 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 
 RUN mkdir -p runtime-config data tmp \

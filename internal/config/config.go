@@ -45,6 +45,7 @@ type ProjectConfig struct {
 	Enabled                 bool   `yaml:"enabled" json:"enabled"`
 	DefaultProjectID        string `yaml:"default_project_id,omitempty" json:"default_project_id,omitempty"` // 机器人/批量等无显式项目时绑定的默认项目
 	FactIndexMaxRunes       int    `yaml:"fact_index_max_runes,omitempty" json:"fact_index_max_runes,omitempty"`
+	FactIndexPathMaxRunes   int    `yaml:"fact_index_path_max_runes,omitempty" json:"fact_index_path_max_runes,omitempty"`
 	FactSummaryMaxRunes     int    `yaml:"fact_summary_max_runes,omitempty" json:"fact_summary_max_runes,omitempty"`
 	DefaultInjectDeprecated bool   `yaml:"default_inject_deprecated,omitempty" json:"default_inject_deprecated,omitempty"`
 }
@@ -55,6 +56,14 @@ func (c ProjectConfig) FactIndexMaxRunesEffective() int {
 		return 3500
 	}
 	return c.FactIndexMaxRunes
+}
+
+// FactIndexPathMaxRunesEffective 攻击路径速览段的最大 rune 数（从 fact_index_max_runes 预算中预留）。
+func (c ProjectConfig) FactIndexPathMaxRunesEffective() int {
+	if c.FactIndexPathMaxRunes <= 0 {
+		return 1000
+	}
+	return c.FactIndexPathMaxRunes
 }
 
 // FactSummaryMaxRunesEffective upsert 时 summary 最大 rune 数（索引一行，宜含验证要点）。

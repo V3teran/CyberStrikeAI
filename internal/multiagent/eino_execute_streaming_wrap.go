@@ -34,6 +34,15 @@ func einoExecuteTimeoutUserHint() string {
 	return "已超时终止 · Timed out"
 }
 
+// einoExecuteRecvErrIsToolTimeout 判断 Recv 错误是否由 agent.tool_timeout_minutes 触发。
+// WithTimeout 到期后 local 侧常报 canceled / exit -1，但 execCtx.Err() 仍为 DeadlineExceeded。
+func einoExecuteRecvErrIsToolTimeout(rerr error, tctx context.Context) bool {
+	if tctx != nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	return errors.Is(rerr, context.DeadlineExceeded)
+}
+
 // einoStreamingShellWrap 包装 Eino filesystem 使用的 StreamingShell（cloudwego eino-ext local.Local）。
 // 官方 execute 工具默认走 ExecuteStreaming 且不设 RunInBackendGround；末尾带 & 时子进程仍与管道相连，
 // streamStdout 按行读取会在无换行输出时长时间阻塞（与 MCP 工具 exec 的独立实现不同）。
@@ -83,6 +92,16 @@ func (w *einoStreamingShellWrap) ExecuteStreaming(ctx context.Context, input *fi
 		if execCancel != nil {
 			execCancel()
 		}
+		if einoExecuteRecvErrIsToolTimeout(err, execCtx) {
+			hint := "\n\n" + einoExecuteTimeoutUserHint() + "\n"
+			if w.recordMonitor != nil {
+				w.recordMonitor(tid, userCmd, hint, false, context.DeadlineExceeded)
+			}
+			if w.invokeNotify != nil && tid != "" {
+				w.invokeNotify.Fire(tid, "execute", agentTag, false, hint, context.DeadlineExceeded)
+			}
+			return schema.StreamReaderFromArray([]*filesystem.ExecuteResponse{{Output: hint}}), nil
+		}
 		if w.recordMonitor != nil {
 			w.recordMonitor(tid, userCmd, "", false, err)
 		}
@@ -91,7 +110,7 @@ func (w *einoStreamingShellWrap) ExecuteStreaming(ctx context.Context, input *fi
 		}
 		return nil, err
 	}
-	if sr == nil || w.invokeNotify == nil || tid == "" {
+	if sr == nil || w.invokeNotify == nil {
 		if execCancel != nil {
 			execCancel()
 		}
@@ -120,6 +139,11 @@ func (w *einoStreamingShellWrap) ExecuteStreaming(ctx context.Context, input *fi
 			if rerr != nil {
 				success = false
 				invokeErr = rerr
+				// 单次 execute 超时须与 MCP 工具一致：写入工具结果尾标、继续迭代，不得向 ADK 流注入硬错误。
+				if einoExecuteRecvErrIsToolTimeout(rerr, tctx) {
+					invokeErr = context.DeadlineExceeded
+					break
+				}
 				_ = outW.Send(nil, rerr)
 				break
 			}

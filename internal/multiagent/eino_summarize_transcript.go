@@ -23,6 +23,11 @@ const (
 	transcriptSkillsSystemMarker     = "# Skills System"
 )
 
+type transcriptToolCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
 // formatSummarizationTranscript renders pre-compaction messages for transcript.txt.
 // Best practice: keep full user/assistant/tool turns; slim system to dynamic blocks only.
 func formatSummarizationTranscript(msgs []adk.Message) string {
@@ -138,15 +143,21 @@ func appendTranscriptMessage(sb *strings.Builder, msg adk.Message) {
 		}
 	}
 	if len(msg.ToolCalls) > 0 {
-		if b, err := sonic.Marshal(msg.ToolCalls); err == nil {
+		if b, err := sonic.Marshal(formatTranscriptToolCalls(msg.ToolCalls)); err == nil {
 			sb.WriteString("tool_calls: ")
 			sb.Write(b)
 			sb.WriteByte('\n')
 		}
 	}
-	if msg.ToolCallID != "" {
-		sb.WriteString("tool_call_id: ")
-		sb.WriteString(msg.ToolCallID)
-		sb.WriteByte('\n')
+}
+
+func formatTranscriptToolCalls(calls []schema.ToolCall) []transcriptToolCall {
+	out := make([]transcriptToolCall, 0, len(calls))
+	for _, tc := range calls {
+		out = append(out, transcriptToolCall{
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
 	}
+	return out
 }

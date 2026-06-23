@@ -192,8 +192,8 @@ func TestSummarizeFinalize_KeepsToolRoundIntact(t *testing.T) {
 	if len(out) < 2 {
 		t.Fatalf("output too short: %d", len(out))
 	}
-	if out[0] != sys {
-		t.Fatalf("first message must be system")
+	if out[0].Role != schema.System || out[0].Content != "sys" {
+		t.Fatalf("first message must be system sys, got %s: %q", out[0].Role, out[0].Content)
 	}
 	if out[1] != summary {
 		t.Fatalf("second message must be summary")
@@ -293,12 +293,12 @@ func TestSummarizeFinalize_BudgetZeroFallsBackToSummaryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(out) != 2 || out[0] != sys || out[1] != summary {
+	if len(out) != 2 || out[0].Role != schema.System || out[0].Content != "sys" || out[1] != summary {
 		t.Fatalf("budget=0 must yield [system, summary] only, got %+v", out)
 	}
 }
 
-func TestSummarizeFinalize_PreservesAllSystemMessages(t *testing.T) {
+func TestSummarizeFinalize_MergesSystemMessages(t *testing.T) {
 	sys1 := schema.SystemMessage("sys1")
 	sys2 := schema.SystemMessage("sys2")
 	summary := schema.AssistantMessage("s", nil)
@@ -321,10 +321,13 @@ func TestSummarizeFinalize_PreservesAllSystemMessages(t *testing.T) {
 	for _, m := range out {
 		if m != nil && m.Role == schema.System {
 			systemCount++
+			if got := m.Content; got != "sys1\n\nsys2" {
+				t.Fatalf("unexpected merged system content: %q", got)
+			}
 		}
 	}
-	if systemCount != 2 {
-		t.Fatalf("want 2 system messages retained, got %d", systemCount)
+	if systemCount != 1 {
+		t.Fatalf("want 1 merged system message, got %d", systemCount)
 	}
 }
 
@@ -377,6 +380,12 @@ func TestWriteSummarizationTranscript(t *testing.T) {
 	}
 	if !strings.Contains(text, "tool_calls:") || !strings.Contains(text, "nmap output") {
 		t.Fatalf("missing tool round: %q", text)
+	}
+	if !strings.Contains(text, `"name":"stub_tool"`) || !strings.Contains(text, `"arguments":"{}"`) {
+		t.Fatalf("missing tool name/arguments: %q", text)
+	}
+	if strings.Contains(text, "tool_call_id") || strings.Contains(text, `"id":"tc1"`) {
+		t.Fatalf("transcript should omit tool_call_id: %q", text)
 	}
 }
 

@@ -627,6 +627,8 @@ func runEinoADKAgentLoop(ctx context.Context, args *einoADKRunLoopArgs, baseMsgs
 			if restarted {
 				continue
 			}
+		} else {
+			transientRetrier.reset()
 		}
 		if ev.AgentName != "" && progress != nil {
 			iterEinoAgent := orchestratorName

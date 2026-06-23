@@ -27,6 +27,7 @@ func TestIsEinoTransientRunError(t *testing.T) {
 		{"429", errors.New("HTTP 429 Too Many Requests"), true},
 		{"rate limit", errors.New(`{"error":"rate limit exceeded"}`), true},
 		{"connection reset", errors.New("read tcp: connection reset by peer"), true},
+		{"http2 goaway", errors.New("failed to receive stream chunk: error, http2: server sent GOAWAY and closed the connection; LastStreamID=791, ErrCode=NO_ERROR"), true},
 		{"unexpected eof", errors.New("unexpected EOF"), true},
 		{"503", errors.New("upstream returned 503"), true},
 		{"iteration limit", errors.New("max iteration reached"), false},
@@ -87,6 +88,20 @@ func TestEinoRunRetryMaxAttemptsFromArgs(t *testing.T) {
 	}
 	if RunRetryMaxAttemptsFromConfig(nil) != defaultEinoRunRetryMaxAttempts {
 		t.Fatal("config nil should use default")
+	}
+}
+
+func TestEinoTransientRunRetrierReset(t *testing.T) {
+	t.Parallel()
+	r := newEinoTransientRunRetrier(einoTransientRunRetryPolicy{maxAttempts: 10, maxBackoff: 30 * time.Second})
+	r.attempts = 3
+	r.reset()
+	if r.attempt() != 0 {
+		t.Fatalf("after reset: attempt=%d, want 0", r.attempt())
+	}
+	// 重置后下一次退避应从 2s 起算（attempt index 0）。
+	if got := einoTransientRetryBackoff(r.attempt(), r.policy.maxBackoff); got != 2*time.Second {
+		t.Fatalf("backoff after reset: got %v, want 2s", got)
 	}
 }
 

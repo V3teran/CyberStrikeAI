@@ -257,17 +257,19 @@ func summarizeFinalizeWithRecentAssistantToolTrail(
 		nonSystem = append(nonSystem, msg)
 	}
 
+	mergedSystem := mergeCollectedSystemMessages(systemMsgs)
+
 	if recentTrailTokenBudget <= 0 || len(nonSystem) == 0 {
-		out := make([]adk.Message, 0, len(systemMsgs)+1)
-		out = append(out, systemMsgs...)
+		out := make([]adk.Message, 0, len(mergedSystem)+1)
+		out = append(out, mergedSystem...)
 		out = append(out, summary)
 		return out, nil
 	}
 
 	rounds := splitMessagesIntoRounds(nonSystem)
 	if len(rounds) == 0 {
-		out := make([]adk.Message, 0, len(systemMsgs)+1)
-		out = append(out, systemMsgs...)
+		out := make([]adk.Message, 0, len(mergedSystem)+1)
+		out = append(out, mergedSystem...)
 		out = append(out, summary)
 		return out, nil
 	}
@@ -319,8 +321,8 @@ func summarizeFinalizeWithRecentAssistantToolTrail(
 		selectedMsgs = append(selectedMsgs, selectedRoundsReverse[i].messages...)
 	}
 
-	out := make([]adk.Message, 0, len(systemMsgs)+1+len(selectedMsgs))
-	out = append(out, systemMsgs...)
+	out := make([]adk.Message, 0, len(mergedSystem)+1+len(selectedMsgs))
+	out = append(out, mergedSystem...)
 	out = append(out, summary)
 	out = append(out, selectedMsgs...)
 	return out, nil

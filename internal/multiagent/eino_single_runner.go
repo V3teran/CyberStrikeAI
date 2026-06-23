@@ -144,13 +144,14 @@ func RunEinoSingleChatModelAgent(
 		}
 		handlers = append(handlers, einoSkillMW)
 	}
-	handlers = append(handlers, mainSumMw)
-	if teleMw := newEinoModelInputTelemetryMiddleware(logger, appCfg.OpenAI.Model, conversationID, "eino_single"); teleMw != nil {
-		handlers = append(handlers, teleMw)
-	}
-	if capMw := newModelFacingTraceMiddleware(modelFacingTrace); capMw != nil {
-		handlers = append(handlers, capMw)
-	}
+	handlers = appendEinoChatModelTailMiddlewares(handlers, einoChatModelTailConfig{
+		logger:         logger,
+		phase:          "eino_single",
+		summarization:  mainSumMw,
+		modelName:      appCfg.OpenAI.Model,
+		conversationID: conversationID,
+		trace:          modelFacingTrace,
+	})
 
 	maxIter := agentMaxIterations(appCfg)
 

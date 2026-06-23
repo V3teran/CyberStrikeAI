@@ -231,13 +231,13 @@ func RunDeepAgent(
 				}
 				subHandlers = append(subHandlers, einoSkillMW)
 			}
-			subHandlers = append(subHandlers, subSumMw)
-			// 孤儿 tool 消息兜底：放在 summarization 之后，telemetry 之前，
-			// 以便 telemetry 记录的 token 数与 LLM 实际入参一致。
-			subHandlers = append(subHandlers, newOrphanToolPrunerMiddleware(logger, "sub_agent:"+id))
-			if teleMw := newEinoModelInputTelemetryMiddleware(logger, appCfg.OpenAI.Model, conversationID, "sub_agent"); teleMw != nil {
-				subHandlers = append(subHandlers, teleMw)
-			}
+			subHandlers = appendEinoChatModelTailMiddlewares(subHandlers, einoChatModelTailConfig{
+				logger:         logger,
+				phase:          "sub_agent:" + id,
+				summarization:  subSumMw,
+				modelName:      appCfg.OpenAI.Model,
+				conversationID: conversationID,
+			})
 
 			subInstrFinal := project.AppendVisionImageAnalysisIfReady(instr, appCfg.Vision.Ready())
 			subInstrFinal = injectToolNamesOnlyInstruction(ctx, subInstrFinal, subTools, subToolSearchActive)
@@ -379,14 +379,14 @@ func RunDeepAgent(
 	if einoSkillMW != nil {
 		deepHandlers = append(deepHandlers, einoSkillMW)
 	}
-	deepHandlers = append(deepHandlers, mainSumMw)
-	deepHandlers = append(deepHandlers, newOrphanToolPrunerMiddleware(logger, "deep_orchestrator"))
-	if teleMw := newEinoModelInputTelemetryMiddleware(logger, appCfg.OpenAI.Model, conversationID, "deep_orchestrator"); teleMw != nil {
-		deepHandlers = append(deepHandlers, teleMw)
-	}
-	if capMw := newModelFacingTraceMiddleware(modelFacingTrace); capMw != nil {
-		deepHandlers = append(deepHandlers, capMw)
-	}
+	deepHandlers = appendEinoChatModelTailMiddlewares(deepHandlers, einoChatModelTailConfig{
+		logger:         logger,
+		phase:          "deep_orchestrator",
+		summarization:  mainSumMw,
+		modelName:      appCfg.OpenAI.Model,
+		conversationID: conversationID,
+		trace:          modelFacingTrace,
+	})
 
 	supHandlers := []adk.ChatModelAgentMiddleware{}
 	if len(mainOrchestratorPre) > 0 {
@@ -395,14 +395,14 @@ func RunDeepAgent(
 	if einoSkillMW != nil {
 		supHandlers = append(supHandlers, einoSkillMW)
 	}
-	supHandlers = append(supHandlers, mainSumMw)
-	supHandlers = append(supHandlers, newOrphanToolPrunerMiddleware(logger, "supervisor_orchestrator"))
-	if teleMw := newEinoModelInputTelemetryMiddleware(logger, appCfg.OpenAI.Model, conversationID, "supervisor_orchestrator"); teleMw != nil {
-		supHandlers = append(supHandlers, teleMw)
-	}
-	if capMw := newModelFacingTraceMiddleware(modelFacingTrace); capMw != nil {
-		supHandlers = append(supHandlers, capMw)
-	}
+	supHandlers = appendEinoChatModelTailMiddlewares(supHandlers, einoChatModelTailConfig{
+		logger:         logger,
+		phase:          "supervisor_orchestrator",
+		summarization:  mainSumMw,
+		modelName:      appCfg.OpenAI.Model,
+		conversationID: conversationID,
+		trace:          modelFacingTrace,
+	})
 
 	mainToolsCfg := adk.ToolsConfig{
 		ToolsNodeConfig: compose.ToolsNodeConfig{
@@ -451,12 +451,14 @@ func RunDeepAgent(
 			SkillMiddleware:      einoSkillMW,
 			FilesystemMiddleware: peFsMw,
 			ModelFacingTrace:     modelFacingTrace,
-			PlannerReplannerRewriteHandlers: []adk.ChatModelAgentMiddleware{
-				mainSumMw,
-				// 孤儿 tool 消息兜底：必须挂在 summarization 之后、telemetry 之前。
-				newOrphanToolPrunerMiddleware(logger, "plan_execute_planner_replanner"),
-				newEinoModelInputTelemetryMiddleware(logger, appCfg.OpenAI.Model, conversationID, "plan_execute_planner_replanner_rewrite"),
-			},
+			PlannerReplannerRewriteHandlers: appendEinoChatModelTailMiddlewares(nil, einoChatModelTailConfig{
+				logger:         logger,
+				phase:          "plan_execute_planner_replanner",
+				summarization:  mainSumMw,
+				modelName:      appCfg.OpenAI.Model,
+				conversationID: conversationID,
+				skipTrace:      true,
+			}),
 		})
 		if perr != nil {
 			return nil, perr

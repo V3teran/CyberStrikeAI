@@ -62,6 +62,7 @@ func isEinoTransientRunError(err error) bool {
 		"dial tcp",
 		"tls handshake timeout",
 		"stream error",
+		"goaway", // http2: server sent GOAWAY and closed the connection
 		"unexpected eof",
 		`": eof`, // net/http: Post "url": EOF (often wraps io.EOF)
 		"unexpected end of json",
@@ -142,6 +143,9 @@ func (r *einoTransientRunRetrier) attempt() int { return r.attempts }
 
 func (r *einoTransientRunRetrier) maxAttempts() int { return r.policy.maxAttempts }
 
+// reset 在一次成功推进后清零重试计数，使后续临时错误从第 1 次退避重新开始。
+func (r *einoTransientRunRetrier) reset() { r.attempts = 0 }
+
 func einoRunRetryMaxAttempts(args *einoADKRunLoopArgs) int {
 	if args != nil && args.RunRetryMaxAttempts > 0 {
 		return args.RunRetryMaxAttempts
@@ -177,10 +181,11 @@ const (
 // 1) ModelFacingTrace（与模型实际入参一致） 2) 事件流累积的 runAccumulatedMsgs 3) 初始 msgs。
 func einoMessagesForRunRestart(args *einoADKRunLoopArgs, baseMsgs, accumulated []adk.Message, baseCount int) ([]adk.Message, einoRunRestartContextSource) {
 	if trace := persistTraceSource(args, nil); len(trace) > 0 {
-		return append([]adk.Message(nil), trace...), einoRestartContextModelTrace
+		// modelFacingTrace includes prior Instruction system message(s); genModelInput will prepend again.
+		return stripADKSystemMessages(trace), einoRestartContextModelTrace
 	}
 	if len(accumulated) > baseCount {
-		return append([]adk.Message(nil), accumulated...), einoRestartContextAccumulated
+		return stripADKSystemMessages(accumulated), einoRestartContextAccumulated
 	}
 	return append([]adk.Message(nil), baseMsgs...), einoRestartContextInitial
 }

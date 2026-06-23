@@ -1336,6 +1336,21 @@ func (h *AgentHandler) CancelAgentLoop(c *gin.Context) {
 			})
 			return
 		}
+		if h.tasks.AbortActiveEinoExecute(req.ConversationID, note) {
+			h.logger.Info("对话页仅终止当前 Eino execute",
+				zap.String("conversationId", req.ConversationID),
+				zap.Bool("hasNote", note != ""),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"status":              "tool_abort_requested",
+				"conversationId":      req.ConversationID,
+				"message":             "已请求终止当前 execute 命令；命令返回后本轮推理将继续。",
+				"continueAfter":       true,
+				"interruptWithNote":   note != "",
+				"continueWithoutTool": false,
+			})
+			return
+		}
 		// 无进行中的 MCP 工具（模型纯推理/流式输出阶段）：取消当前上下文并由 Eino 流式处理器合并用户补充后自动续跑。
 		h.tasks.SetInterruptContinueNote(req.ConversationID, note)
 		ok, err := h.tasks.CancelTask(req.ConversationID, multiagent.ErrInterruptContinue)
@@ -2230,6 +2245,7 @@ func (h *AgentHandler) executeBatchQueue(queueID string) {
 			progressCallback = h.createProgressCallback(taskCtx, cancelWithCause, conversationID, assistantMessageID, sendEvent)
 			taskCtx = mcp.WithMCPConversationID(taskCtx, conversationID)
 			taskCtx = mcp.WithToolRunRegistry(taskCtx, h.tasks)
+			taskCtx = mcp.WithEinoExecuteRunRegistry(taskCtx, h.tasks)
 
 			// 使用队列配置的角色工具列表（如果为空，表示使用所有工具）
 			useBatchMulti := false

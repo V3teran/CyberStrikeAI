@@ -37,6 +37,11 @@ type AgentTask struct {
 	// InterruptContinueNote 无 MCP 时「中断并继续」由用户在弹窗中填写的补充说明（Cancel 前写入，续跑轮次读取后清空）
 	InterruptContinueNote string `json:"-"`
 
+	// activeEinoExecuteCancel 当前进行中的 Eino filesystem execute 取消函数（与 MCP 工具并行，供中断并继续）
+	activeEinoExecuteCancel context.CancelFunc
+	// activeEinoExecuteAbortNote AbortActiveEinoExecute 写入的用户说明，由 execute 收尾时合并进工具结果
+	activeEinoExecuteAbortNote string
+
 	cancel func(error)
 }
 
@@ -68,6 +73,69 @@ func (m *AgentTaskManager) UnregisterRunningTool(conversationID, executionID str
 			t.ActiveMCPExecutionID = ""
 		}
 	}
+}
+
+// RegisterActiveEinoExecute 登记进行中的 Eino filesystem execute（每会话同时仅一条）。
+func (m *AgentTaskManager) RegisterActiveEinoExecute(conversationID string, cancel context.CancelFunc) {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" || cancel == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.tasks[conversationID]; ok && t != nil {
+		t.activeEinoExecuteCancel = cancel
+		t.activeEinoExecuteAbortNote = ""
+	}
+}
+
+// UnregisterActiveEinoExecute execute 正常结束或已取消后清除登记。
+func (m *AgentTaskManager) UnregisterActiveEinoExecute(conversationID string) {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.tasks[conversationID]; ok && t != nil {
+		t.activeEinoExecuteCancel = nil
+		t.activeEinoExecuteAbortNote = ""
+	}
+}
+
+// AbortActiveEinoExecute 终止当前 Eino execute 并暂存用户说明（与 MCP 工具终止一致）。
+func (m *AgentTaskManager) AbortActiveEinoExecute(conversationID, note string) bool {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return false
+	}
+	m.mu.Lock()
+	t, ok := m.tasks[conversationID]
+	if !ok || t == nil || t.activeEinoExecuteCancel == nil {
+		m.mu.Unlock()
+		return false
+	}
+	t.activeEinoExecuteAbortNote = strings.TrimSpace(note)
+	cancel := t.activeEinoExecuteCancel
+	m.mu.Unlock()
+	cancel()
+	return true
+}
+
+// TakeEinoExecuteAbortNote 读取并清空 execute 终止说明（execute 收尾时调用一次）。
+func (m *AgentTaskManager) TakeEinoExecuteAbortNote(conversationID string) string {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.tasks[conversationID]; ok && t != nil {
+		n := t.activeEinoExecuteAbortNote
+		t.activeEinoExecuteAbortNote = ""
+		return n
+	}
+	return ""
 }
 
 // SetInterruptContinueNote 在发起 ErrInterruptContinue 取消前写入用户补充说明（仅内存）。

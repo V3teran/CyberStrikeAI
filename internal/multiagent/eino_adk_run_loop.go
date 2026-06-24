@@ -553,6 +553,13 @@ func runEinoADKAgentLoop(ctx context.Context, args *einoADKRunLoopArgs, baseMsgs
 		return true, nil
 	}
 
+	// 仅在退避重试后真正收到数据/完成一步时清零，避免重启后首个无错 ADK 事件误把计数打回 0。
+	confirmTransientRetryRecovery := func() {
+		if transientRetrier.attempt() > 0 {
+			transientRetrier.reset()
+		}
+	}
+
 	takePartial := func(runErr error) (*RunResult, error) {
 		if len(runAccumulatedMsgs) <= baseAccumulatedCount {
 			return nil, runErr
@@ -638,8 +645,6 @@ func runEinoADKAgentLoop(ctx context.Context, args *einoADKRunLoopArgs, baseMsgs
 			if restarted {
 				continue
 			}
-		} else {
-			transientRetrier.reset()
 		}
 		if ev.AgentName != "" && progress != nil {
 			iterEinoAgent := orchestratorName
@@ -718,6 +723,9 @@ func runEinoADKAgentLoop(ctx context.Context, args *einoADKRunLoopArgs, baseMsgs
 					zap.Error(toolStreamRecvErr),
 					zap.String("agent", ev.AgentName),
 					zap.String("tool", toolName))
+			}
+			if toolStreamRecvErr == nil {
+				confirmTransientRetryRecovery()
 			}
 			continue
 		}
@@ -990,6 +998,8 @@ func runEinoADKAgentLoop(ctx context.Context, args *einoADKRunLoopArgs, baseMsgs
 				if restarted {
 					continue
 				}
+			} else {
+				confirmTransientRetryRecovery()
 			}
 			continue
 		}
@@ -1083,6 +1093,7 @@ func runEinoADKAgentLoop(ctx context.Context, args *einoADKRunLoopArgs, baseMsgs
 			toolCallID := strings.TrimSpace(msg.ToolCallID)
 			tryEmitToolResultProgress(toolName, content, toolCallID, isErr, ev.AgentName)
 		}
+		confirmTransientRetryRecovery()
 	}
 
 	mcpIDsMu.Lock()

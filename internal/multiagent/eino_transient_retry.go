@@ -143,7 +143,7 @@ func (r *einoTransientRunRetrier) attempt() int { return r.attempts }
 
 func (r *einoTransientRunRetrier) maxAttempts() int { return r.policy.maxAttempts }
 
-// reset 在一次成功推进后清零重试计数，使后续临时错误从第 1 次退避重新开始。
+// reset 在退避重试后成功推进（流/消息完整接收）时清零计数，使后续临时错误从第 1 次退避重新开始。
 func (r *einoTransientRunRetrier) reset() { r.attempts = 0 }
 
 func einoRunRetryMaxAttempts(args *einoADKRunLoopArgs) int {

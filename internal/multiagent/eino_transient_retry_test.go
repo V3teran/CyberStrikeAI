@@ -105,6 +105,32 @@ func TestEinoTransientRunRetrierReset(t *testing.T) {
 	}
 }
 
+func TestEinoTransientRunRetrierConsecutiveFailures(t *testing.T) {
+	t.Parallel()
+	r := newEinoTransientRunRetrier(einoTransientRunRetryPolicy{maxAttempts: 10, maxBackoff: 30 * time.Second})
+	ctx := context.Background()
+	runErr := errors.New("internal server error")
+	args := &einoADKRunLoopArgs{}
+	base := []adk.Message{schema.UserMessage("hi")}
+
+	for want := 1; want <= 3; want++ {
+		restarted, _, _, _, err := r.tryRetry(ctx, runErr, args, base, nil, len(base))
+		if err != nil {
+			t.Fatalf("tryRetry attempt %d: %v", want, err)
+		}
+		if !restarted {
+			t.Fatalf("tryRetry attempt %d: want restarted", want)
+		}
+		if got := r.attempt(); got != want {
+			t.Fatalf("after failure %d: attempt=%d, want %d", want, got, want)
+		}
+	}
+	r.reset()
+	if r.attempt() != 0 {
+		t.Fatalf("after successful recovery reset: attempt=%d, want 0", r.attempt())
+	}
+}
+
 func TestAppendUserMessageIfNeeded(t *testing.T) {
 	t.Parallel()
 	msgs := []adk.Message{schema.UserMessage("old task")}

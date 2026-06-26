@@ -447,7 +447,7 @@ func (h *RobotHandler) cmdUnbindProject(platform, userID string) string {
 }
 
 func (h *RobotHandler) cmdList() string {
-	convs, err := h.db.ListConversations(50, 0, "", "")
+	convs, err := h.db.ListConversations(50, 0, "", "", "")
 	if err != nil {
 		return "获取对话列表失败: " + err.Error()
 	}

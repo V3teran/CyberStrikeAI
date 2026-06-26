@@ -103,6 +103,7 @@ func (h *ConversationHandler) ListConversations(c *gin.Context) {
 	limitStr := c.DefaultQuery("limit", "50")
 	offsetStr := c.DefaultQuery("offset", "0")
 	search := c.Query("search") // 获取搜索参数
+	projectID := strings.TrimSpace(c.Query("project_id"))
 
 	limit, _ := strconv.Atoi(limitStr)
 	offset, _ := strconv.Atoi(offsetStr)
@@ -114,7 +115,7 @@ func (h *ConversationHandler) ListConversations(c *gin.Context) {
 		limit = 1000
 	}
 
-	excludeGrouped := strings.TrimSpace(search) == "" &&
+	excludeGrouped := strings.TrimSpace(search) == "" && projectID == "" &&
 		(c.Query("exclude_grouped") == "true" || c.Query("exclude_grouped") == "1")
 	sortBy := strings.TrimSpace(c.Query("sort_by"))
 
@@ -122,14 +123,14 @@ func (h *ConversationHandler) ListConversations(c *gin.Context) {
 	var total int
 	var err error
 	if excludeGrouped {
-		conversations, err = h.db.ListUngroupedConversations(limit, offset, sortBy)
+		conversations, err = h.db.ListUngroupedConversations(limit, offset, sortBy, projectID)
 		if err == nil {
-			total, err = h.db.CountUngroupedConversations()
+			total, err = h.db.CountUngroupedConversations(projectID)
 		}
 	} else {
-		conversations, err = h.db.ListConversations(limit, offset, search, sortBy)
+		conversations, err = h.db.ListConversations(limit, offset, search, sortBy, projectID)
 		if err == nil {
-			total, err = h.db.CountConversations(search)
+			total, err = h.db.CountConversations(search, projectID)
 		}
 	}
 	if err != nil {

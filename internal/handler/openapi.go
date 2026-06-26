@@ -1243,6 +1243,34 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 								"type": "string",
 							},
 						},
+						{
+							"name":        "project_id",
+							"in":          "query",
+							"required":    false,
+							"description": "按项目筛选；传 __none__ 表示仅未绑定项目的对话",
+							"schema": map[string]interface{}{
+								"type": "string",
+							},
+						},
+						{
+							"name":        "exclude_grouped",
+							"in":          "query",
+							"required":    false,
+							"description": "为 true 时排除已加入分组的对话（默认在未搜索且未按项目筛选时启用）",
+							"schema": map[string]interface{}{
+								"type": "boolean",
+							},
+						},
+						{
+							"name":        "sort_by",
+							"in":          "query",
+							"required":    false,
+							"description": "排序字段：updated_at（默认）或 created_at",
+							"schema": map[string]interface{}{
+								"type": "string",
+								"enum": []string{"updated_at", "created_at"},
+							},
+						},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{

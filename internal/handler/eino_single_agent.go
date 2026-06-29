@@ -178,6 +178,7 @@ func (h *AgentHandler) EinoSingleAgentLoopStream(c *gin.Context) {
 	var cumulativeMCPExecutionIDs []string
 	// 同一请求内分段续跑时，主代理 iteration 事件按偏移累计，避免 UI 出现「第3轮 → 第1轮」回跳。
 	var mainIterationOffset int
+	var emptyResponseContinueAttempt int
 
 	for {
 		segmentMainIterationMax := 0
@@ -239,6 +240,13 @@ func (h *AgentHandler) EinoSingleAgentLoopStream(c *gin.Context) {
 		}
 
 		if runErr == nil {
+			mw := &h.config.MultiAgent.EinoMiddleware
+			if h.tryContinueOnEinoEmptyResponse(taskCtx, mw, conversationID, result, &emptyResponseContinueAttempt, &curHistory, &curFinalMessage, progressCallback) {
+				mainIterationOffset += segmentMainIterationMax
+				timeoutCancel()
+				baseCtx, cancelWithCause, taskCtx, timeoutCancel = h.rebindEinoRunningTask(conversationID, timeoutCancel)
+				continue
+			}
 			timeoutCancel()
 			break
 		}

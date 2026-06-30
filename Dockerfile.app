@@ -37,6 +37,11 @@ ENV APP_HOME=/app \
 
 WORKDIR ${APP_HOME}
 
+# tini (ENTRYPOINT 需要) + curl (HEALTHCHECK 需要)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # 从编译阶段复制主程序
 COPY --from=app-builder /out/cyberstrike-ai ./cyberstrike-ai
 

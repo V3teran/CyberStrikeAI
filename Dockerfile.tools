@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7
+# CyberStrikeAI Tools Base Image
+# 纯工具层：Kali + 全部安全工具，不含 CSAI 主程序
+# 独立维护，工具变动时才需要重建
+
+ARG tools_version=v1.6.47
+
+FROM golang:1.24-bookworm AS go-provider
+
+FROM kalilinux/kali-rolling
+
+ARG tools_version
+ARG GOPROXY=https://proxy.golang.org,direct
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    GOPROXY=${GOPROXY} \
+    GOBIN=/opt/cyberstrike/bin \
+    PATH=/opt/cyberstrike/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# 从上游 release 拉取 tools/*.yaml（不存我们仓库，自动同步上游）
+ADD https://github.com/Ed1s0nZ/CyberStrikeAI/archive/refs/tags/${tools_version}.tar.gz /tmp/cyberstrike-src.tar.gz
+RUN mkdir -p /tmp/cyberstrike-src \
+    && tar xzf /tmp/cyberstrike-src.tar.gz --strip-components=1 -C /tmp/cyberstrike-src \
+    && mkdir -p /opt/cyberstrike \
+    && cp -r /tmp/cyberstrike-src/tools /opt/cyberstrike/tools \
+    && rm -rf /tmp/cyberstrike-src /tmp/cyberstrike-src.tar.gz
+
+# Go 工具链（install-tools.sh 的 go install 需要）
+COPY --from=go-provider /usr/local/go /usr/local/go
+
+# install-tools.sh 的前置依赖
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash curl wget git ca-certificates unzip xz-utils file \
+        python3 python3-pip python3-venv pipx \
+        ruby ruby-dev \
+        nodejs npm \
+        default-jdk-headless \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# install-tools.sh 必须和 tools/ 在同一父目录下（脚本内 TOOLS_DIR="$ROOT_DIR/tools"）
+COPY install-tools.sh /opt/cyberstrike/install-tools.sh
+RUN chmod +x /opt/cyberstrike/install-tools.sh \
+    && mkdir -p /opt/cyberstrike/bin \
+    && apt-get update \
+    && apt-get install -y kali-linux-headless \
+    && (cd /opt/cyberstrike && ./install-tools.sh --no-sudo || true) \
+    && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
+
+# 补齐 install-tools.sh 覆盖不到 / 装错的工具
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gdb feroxbuster 2>/dev/null; \
+    rm -f /usr/local/bin/katana; \
+    GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1 || true; \
+    GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.9.0 || true; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/devanshbatham/paramspider.git' 2>/dev/null || true; \
+    (git clone --depth 1 https://github.com/maurosoria/dirsearch.git /opt/dirsearch \
+        && printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
+        && chmod +x /opt/cyberstrike/bin/dirsearch) 2>/dev/null || true; \
+    (cd /tmp && curl -sSL -o rustscan.deb.zip https://github.com/bee-san/RustScan/releases/download/2.4.1/rustscan.deb.zip \
+        && unzip -o rustscan.deb.zip && dpkg -i rustscan_2.4.1-1_amd64.deb && rm -f rustscan*.zip rustscan*.deb rustscan.tmp0-stripped) 2>/dev/null || true; \
+    (cd /tmp && curl -fsSL -o fscan https://github.com/shadow1ng/fscan/releases/download/v2.1.3/fscan_2.1.3_linux_x64 \
+        && chmod +x fscan && mv fscan /opt/cyberstrike/bin/fscan) 2>/dev/null || true; \
+    (git clone --depth 1 https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool \
+        && pip3 install --break-system-packages --no-cache-dir -r /opt/jwt_tool/requirements.txt 2>/dev/null; \
+        printf '#!/bin/sh\nexec python3 /opt/jwt_tool/jwt_tool.py "$@"\n' > /opt/cyberstrike/bin/jwt_tool \
+        && chmod +x /opt/cyberstrike/bin/jwt_tool) 2>/dev/null || true; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/swisskyrepo/GraphQLmap.git' 2>/dev/null || true; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install zapcli 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
+
+# 清理临时文件，只保留工具（Go 工具链不再需要，tools/ 保留供运行时参考）
+RUN rm -rf /usr/local/go /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true

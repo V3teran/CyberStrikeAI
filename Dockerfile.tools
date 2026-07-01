@@ -75,38 +75,36 @@ RUN apt-get update \
 # 清理 Go 工具链（不再需要）
 RUN rm -rf /usr/local/go 2>/dev/null || true
 
-# ====== 补齐所有缺失工具（经逐一核实的安装方式）======
-# Layer 1: apt 可装的工具
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        gau steghide trivy xsser zsteg foremost hashpump \
-        ghidra libc-database libc-database-dev 2>/dev/null || true; \
+# ====== 补齐所有缺失工具（逐个安装,互不影响）======
+
+# Layer 1: apt 可装的工具（逐个安装,一个失败不影响其他）
+RUN apt-get update && \
+    for pkg in foremost steghide trivy xsser ghidra dotdotpwn enum4linux-ng; do \
+        apt-get install -y --no-install-recommends "$pkg" 2>/dev/null || echo "SKIP: $pkg"; \
+    done; \
     rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
 
-# Layer 2: Rust 编译器 (angr 依赖 rustworkx 需要)
+# Layer 2: Rust 编译器 (angr 依赖 rustworkx)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain stable --profile minimal 2>/dev/null; \
-    export PATH="$HOME/.cargo/bin:$PATH"; \
-    rustc --version 2>/dev/null; \
+    | sh -s -- -y --default-toolchain stable --profile minimal 2>/dev/null || true; \
     rm -rf /root/.cargo/registry /root/.cargo/git 2>/dev/null || true
 
-# Layer 3: 需要 pip 安装的工具
+# Layer 3: pip 工具（逐个安装）
 RUN export PATH="$HOME/.cargo/bin:$PATH"; \
-    pip3 install --break-system-packages --no-cache-dir \
-        angr checkov prowler 2>/dev/null || true; \
-    # enum4linux-ng (pip, apt 没有)
-    pip3 install --break-system-packages --no-cache-dir enum4linux-ng 2>/dev/null || true; \
-    # cloudmapper (依赖较复杂,best-effort)
-    pip3 install --break-system-packages --no-cache-dir cloudmapper 2>/dev/null || true; \
-    # pacu (AWS 攻击框架)
-    pip3 install --break-system-packages --no-cache-dir pacu 2>/dev/null || true; \
+    for pkg in angr checkov prowler enum4linux-ng pacu; do \
+        pip3 install --break-system-packages --no-cache-dir "$pkg" 2>/dev/null || echo "SKIP: $pkg"; \
+    done; \
     rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
-# Layer 4: 需要 npm 安装的工具
+# Layer 4: npm 工具
 RUN npm install -g @stoplight/spectral-cli 2>/dev/null || true; \
     rm -rf /root/.npm /tmp/* 2>/dev/null || true
 
-# Layer 5: GitHub release 二进制 (kube-bench / lightx / clair / dotdotpwn)
+# Layer 5: gem 工具
+RUN gem install zsteg one_gadget 2>/dev/null || true; \
+    rm -rf /root/.gem 2>/dev/null || true
+
+# Layer 6: GitHub release / 源码编译
 RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
         && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \
@@ -119,7 +117,19 @@ RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
     (git clone --depth 1 https://github.com/wiregh/dotdotpwn.git /opt/dotdotpwn \
         && chmod +x /opt/dotdotpwn/dotdotpwn.pl \
         && ln -sf /opt/dotdotpwn/dotdotpwn.pl /usr/local/bin/dotdotpwn) 2>/dev/null || true; \
-    rm -rf /tmp/* 2>/dev/null || true
+    (git clone --depth 1 https://github.com/niklasb/libc-database.git /opt/libc-database \
+        && ln -sf /opt/libc-database/dump /usr/local/bin/libc-database-dump \
+        && ln -sf /opt/libc-database/find /usr/local/bin/libc-database-find) 2>/dev/null || true; \
+    (apt-get update && apt-get install -y --no-install-recommends libssl-dev 2>/dev/null \
+        && git clone --depth 1 https://github.com/bwall/HashPump.git /opt/hashpump \
+        && cd /opt/hashpump && g++ -o hashpump main.cpp -lcrypto \
+        && cp hashpump /usr/local/bin/hashpump) 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
+
+# Layer 7: Go 工具 (gau)
+COPY --from=go-provider /usr/local/go /usr/local/go
+RUN GOBIN=/usr/local/bin /usr/local/go/bin/go install github.com/lc/gau/cmd/gau@latest 2>/dev/null || true; \
+    rm -rf /usr/local/go /root/go /root/.cache 2>/dev/null || true
 
 # 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）
 RUN rm -rf /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true

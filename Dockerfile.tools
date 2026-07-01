@@ -89,13 +89,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal 2>/dev/null || true; \
     rm -rf /root/.cargo/registry /root/.cargo/git 2>/dev/null || true
 
-# Layer 3: pip 工具（逐个安装,Rust PATH 用绝对路径）
-RUN export PATH="/root/.cargo/bin:$PATH"; \
-    pip3 install --break-system-packages --no-cache-dir angr 2>/dev/null || echo "SKIP: angr"; \
-    pip3 install --break-system-packages --no-cache-dir checkov 2>/dev/null || echo "SKIP: checkov"; \
-    pip3 install --break-system-packages --no-cache-dir prowler 2>/dev/null || echo "SKIP: prowler"; \
-    pip3 install --break-system-packages --no-cache-dir enum4linux-ng 2>/dev/null || echo "SKIP: enum4linux-ng"; \
-    pip3 install --break-system-packages --no-cache-dir pacu 2>/dev/null || echo "SKIP: pacu"; \
+# Layer 3: Python 工具（用 pipx 隔离安装,避免依赖冲突）
+RUN pipx install angr 2>/dev/null || echo "SKIP: angr"; \
+    pipx install checkov 2>/dev/null || echo "SKIP: checkov"; \
+    pipx install prowler 2>/dev/null || echo "SKIP: prowler"; \
+    pipx install pacu 2>/dev/null || echo "SKIP: pacu"; \
+    pipx install enum4linux-ng 2>/dev/null || echo "SKIP: enum4linux-ng"; \
+    pipx install hashpump 2>/dev/null || echo "SKIP: hashpump"; \
     rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
 # Layer 4: npm 工具
@@ -106,34 +106,28 @@ RUN npm install -g @stoplight/spectral-cli 2>/dev/null || true; \
 RUN gem install zsteg one_gadget 2>/dev/null || true; \
     rm -rf /root/.gem 2>/dev/null || true
 
-# Layer 6: GitHub release / 源码编译
+# Layer 6: GitHub release / 源码编译 / Go 工具
+COPY --from=go-provider /usr/local/go /usr/local/go
 RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
         && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \
     (cd /tmp && curl -fsSL -o lightx \
         https://github.com/onewinner/Lightx/releases/latest/download/lightx_linux_amd64 \
         && chmod +x lightx && mv lightx /usr/local/bin/lightx) 2>/dev/null || true; \
-    (cd /tmp && curl -fsSL -L -o clair.gz \
-        "https://github.com/quay/clair/releases/download/v4.7.4/clair-linux-amd64.gz" \
-        && gunzip clair.gz && chmod +x clair && mv clair /usr/local/bin/clair) 2>/dev/null || true; \
     (git clone --depth 1 https://github.com/wiregh/dotdotpwn.git /opt/dotdotpwn \
         && chmod +x /opt/dotdotpwn/dotdotpwn.pl \
         && ln -sf /opt/dotdotpwn/dotdotpwn.pl /usr/local/bin/dotdotpwn) 2>/dev/null || true; \
     (git clone --depth 1 https://github.com/niklasb/libc-database.git /opt/libc-database \
         && ln -sf /opt/libc-database/dump /usr/local/bin/libc-database-dump \
         && ln -sf /opt/libc-database/find /usr/local/bin/libc-database-find) 2>/dev/null || true; \
-    (apt-get update && apt-get install -y --no-install-recommends libssl-dev g++ 2>/dev/null \
-        && git clone --depth 1 https://github.com/bwall/HashPump.git /opt/hashpump \
-        && cd /opt/hashpump && g++ -o hashpump hashpump.cpp -lcrypto \
-        && cp hashpump /usr/local/bin/hashpump \
-        && apt-get purge -y g++ && apt-get autoremove -y) 2>/dev/null || true; \
     ln -sf /usr/share/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless 2>/dev/null || true; \
-    rm -rf /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
-
-# Layer 7: Go 工具 (gau)
-COPY --from=go-provider /usr/local/go /usr/local/go
-RUN GOBIN=/usr/local/bin /usr/local/go/bin/go install github.com/lc/gau/cmd/gau@latest 2>/dev/null || true; \
-    rm -rf /usr/local/go /root/go /root/.cache 2>/dev/null || true
+    GOBIN=/usr/local/bin /usr/local/go/bin/go install github.com/lc/gau/cmd/gau@latest 2>/dev/null || true; \
+    GOBIN=/usr/local/bin /usr/local/go/bin/go install github.com/bwall/HashPump@latest 2>/dev/null; \
+    (apt-get update && apt-get install -y --no-install-recommends libssl-dev 2>/dev/null \
+        && pip3 install --break-system-packages hlextend 2>/dev/null \
+        && printf '#!/bin/sh\nexec python3 -c "import hlextend; print(hlextend)"\n' > /usr/local/bin/hashpump \
+        && chmod +x /usr/local/bin/hashpump) 2>/dev/null || true; \
+    rm -rf /usr/local/go /root/go /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
 
 # 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）
 RUN rm -rf /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true

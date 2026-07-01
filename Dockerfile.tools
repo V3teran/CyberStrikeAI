@@ -121,7 +121,7 @@ RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         && ln -sf /opt/libc-database/find /usr/local/bin/libc-database-find) 2>/dev/null || true; \
     ln -sf /usr/share/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless 2>/dev/null || true; \
     (cd /tmp && curl -fsSL -L -o gau.tar.gz \
-        "https://github.com/lc/gau/releases/latest/download/gau_linux_amd64.tar.gz" \
+        "https://github.com/lc/gau/releases/latest/download/gau_2.2.4_linux_amd64.tar.gz" \
         && tar xzf gau.tar.gz && mv gau /usr/local/bin/gau && rm -f gau.tar.gz) 2>/dev/null || true; \
     rm -rf /usr/local/go /root/go /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
 

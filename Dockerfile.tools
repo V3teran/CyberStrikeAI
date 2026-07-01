@@ -75,21 +75,47 @@ RUN apt-get update \
 # 清理 Go 工具链（不再需要）
 RUN rm -rf /usr/local/go 2>/dev/null || true
 
-# 补齐 install-tools.sh 安装失败的 10 个工具
+# ====== 补齐所有缺失工具（经逐一核实的安装方式）======
+# Layer 1: apt 可装的工具
 RUN apt-get update \
-    # dotdotpwn (Perl)、enum4linux-ng、volatility3 — Kali 有包但 headless 可能没带
     && apt-get install -y --no-install-recommends \
-        dotdotpwn enum4linux-ng volatility3 2>/dev/null || true; \
-    # kube-bench — GitHub release 二进制
-    (cd /tmp && curl -fsSL -o kube-bench.deb https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
+        gau steghide trivy xsser zsteg foremost hashpump \
+        ghidra libc-database libc-database-dev 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
+
+# Layer 2: 需要 pip 安装的工具
+RUN pip3 install --break-system-packages --no-cache-dir \
+        angr checkov prowler 2>/dev/null || true; \
+    # enum4linux-ng (pip, apt 没有)
+    pip3 install --break-system-packages --no-cache-dir enum4linux-ng 2>/dev/null || true; \
+    # cloudmapper (依赖较复杂,best-effort)
+    pip3 install --break-system-packages --no-cache-dir cloudmapper 2>/dev/null || true; \
+    # pacu (AWS 攻击框架)
+    pip3 install --break-system-packages --no-cache-dir pacu 2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+# Layer 3: 需要 npm 安装的工具
+RUN npm install -g @stoplight/spectral-cli 2>/dev/null || true; \
+    rm -rf /root/.npm /tmp/* 2>/dev/null || true
+
+# Layer 4: GitHub release 二进制
+RUN # kube-bench
+    (cd /tmp && curl -fsSL -o kube-bench.deb \
+        https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
         && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \
-    # lightx — GitHub release 二进制
-    (cd /tmp && curl -fsSL -o lightx.tar.gz -L https://github.com/zyylhn/lightx/releases/latest/download/lightx_linux_amd64.tar.gz \
-        && tar xzf lightx.tar.gz -C /opt/cyberstrike/bin/ && rm -f lightx.tar.gz) 2>/dev/null || true; \
-    # Python 工具 — pip3 安装（best-effort）
-    pip3 install --break-system-packages --no-cache-dir \
-        angr checkov cloudmapper pacu prowler 2>/dev/null || true; \
-    rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
+    # lightx (仓库已迁移至 onewinner/Lightx)
+    (cd /tmp && curl -fsSL -o lightx \
+        https://github.com/onewinner/Lightx/releases/latest/download/lightx_linux_amd64 \
+        && chmod +x lightx && mv lightx /usr/local/bin/lightx) 2>/dev/null || true; \
+    # clair (容器漏洞扫描器)
+    (cd /tmp && curl -fsSL -o clair \
+        https://github.com/quay/clair/releases/latest/download/clair-linux-amd64 \
+        && chmod +x clair && mv clair /usr/local/bin/clair) 2>/dev/null || true; \
+    # dotdotpwn (apt 没有,从 GitHub clone)
+    (git clone --depth 1 https://github.com/wiregh/dotdotpwn.git /opt/dotdotpwn \
+        && chmod +x /opt/dotdotpwn/dotdotpwn.pl \
+        && ln -sf /opt/dotdotpwn/dotdotpwn.pl /usr/local/bin/dotdotpwn) 2>/dev/null || true; \
+    rm -rf /tmp/* 2>/dev/null || true
 
 # 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）
 RUN rm -rf /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true

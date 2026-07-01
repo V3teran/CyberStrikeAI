@@ -32,13 +32,15 @@ COPY --from=go-provider /usr/local/go /usr/local/go
 
 # install-tools.sh 的前置依赖
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        bash curl wget git ca-certificates unzip xz-utils file \
-        python3 python3-pip python3-venv pipx \
-        ruby ruby-dev \
-        nodejs npm \
-        default-jdk-headless \
-        build-essential \
+    && for i in 1 2 3; do \
+        apt-get install -y --no-install-recommends --fix-missing \
+            bash curl wget git ca-certificates unzip xz-utils file \
+            python3 python3-pip python3-venv pipx \
+            ruby ruby-dev \
+            nodejs npm \
+            default-jdk-headless \
+            build-essential && break || sleep 10; \
+    done \
     && rm -rf /var/lib/apt/lists/*
 
 # install-tools.sh 必须和 tools/ 在同一父目录下（脚本内 TOOLS_DIR="$ROOT_DIR/tools"）
@@ -46,7 +48,9 @@ COPY install-tools.sh /opt/cyberstrike/install-tools.sh
 RUN chmod +x /opt/cyberstrike/install-tools.sh \
     && mkdir -p /opt/cyberstrike/bin \
     && apt-get update \
-    && apt-get install -y kali-linux-headless \
+    && for i in 1 2 3; do \
+        apt-get install -y --fix-missing kali-linux-headless && break || sleep 10; \
+    done \
     && (cd /opt/cyberstrike && ./install-tools.sh --no-sudo || true) \
     && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 
@@ -56,6 +60,7 @@ RUN apt-get update \
     rm -f /usr/local/bin/katana; \
     GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1 || true; \
     GOBIN=/opt/cyberstrike/bin /usr/local/go/bin/go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.9.0 || true; \
+    /opt/cyberstrike/bin/nuclei -update-templates 2>/dev/null || true; \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/devanshbatham/paramspider.git' 2>/dev/null || true; \
     (git clone --depth 1 https://github.com/maurosoria/dirsearch.git /opt/dirsearch \
         && printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
@@ -72,15 +77,16 @@ RUN apt-get update \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install zapcli 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 
-# 清理 Go 工具链（不再需要）
-RUN rm -rf /usr/local/go 2>/dev/null || true
+# Go 工具链保留在镜像中（gau/hashpump 等工具需要 go install 维护）
 
 # ====== 补齐所有缺失工具（逐个安装,互不影响）======
 
 # Layer 1: apt 可装的工具（逐个安装,一个失败不影响其他）
 RUN apt-get update && \
     for pkg in foremost steghide trivy xsser ghidra dotdotpwn enum4linux-ng; do \
-        apt-get install -y --no-install-recommends "$pkg" 2>/dev/null || echo "SKIP: $pkg"; \
+        for i in 1 2 3; do \
+            apt-get install -y --no-install-recommends --fix-missing "$pkg" 2>/dev/null && break || sleep 5; \
+        done; \
     done; \
     rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
 
@@ -123,7 +129,7 @@ RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
     (cd /tmp && curl -fsSL -L -o gau.tar.gz \
         "https://github.com/lc/gau/releases/latest/download/gau_2.2.4_linux_amd64.tar.gz" \
         && tar xzf gau.tar.gz && mv gau /usr/local/bin/gau && rm -f gau.tar.gz) 2>/dev/null || true; \
-    rm -rf /usr/local/go /root/go /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
+    rm -rf /root/go /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
 
 # 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）
 RUN rm -rf /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true

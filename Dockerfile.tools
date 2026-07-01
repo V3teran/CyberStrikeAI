@@ -98,20 +98,16 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN npm install -g @stoplight/spectral-cli 2>/dev/null || true; \
     rm -rf /root/.npm /tmp/* 2>/dev/null || true
 
-# Layer 4: GitHub release 二进制
-RUN # kube-bench
-    (cd /tmp && curl -fsSL -o kube-bench.deb \
+# Layer 4: GitHub release 二进制 (kube-bench / lightx / clair / dotdotpwn)
+RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
         && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \
-    # lightx (仓库已迁移至 onewinner/Lightx)
     (cd /tmp && curl -fsSL -o lightx \
         https://github.com/onewinner/Lightx/releases/latest/download/lightx_linux_amd64 \
         && chmod +x lightx && mv lightx /usr/local/bin/lightx) 2>/dev/null || true; \
-    # clair (容器漏洞扫描器)
     (cd /tmp && curl -fsSL -o clair \
         https://github.com/quay/clair/releases/latest/download/clair-linux-amd64 \
         && chmod +x clair && mv clair /usr/local/bin/clair) 2>/dev/null || true; \
-    # dotdotpwn (apt 没有,从 GitHub clone)
     (git clone --depth 1 https://github.com/wiregh/dotdotpwn.git /opt/dotdotpwn \
         && chmod +x /opt/dotdotpwn/dotdotpwn.pl \
         && ln -sf /opt/dotdotpwn/dotdotpwn.pl /usr/local/bin/dotdotpwn) 2>/dev/null || true; \

@@ -33,7 +33,7 @@ ENV APP_HOME=/app \
     PYTHONUNBUFFERED=1 \
     GOPROXY=https://proxy.golang.org,direct \
     GOBIN=/opt/cyberstrike/bin \
-    PATH=/opt/cyberstrike/bin:/root/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/root/.local/bin:/opt/cyberstrike/bin:/root/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 WORKDIR ${APP_HOME}
 

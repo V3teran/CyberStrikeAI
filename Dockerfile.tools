@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     GOPROXY=${GOPROXY} \
     GOBIN=/opt/cyberstrike/bin \
-    PATH=/opt/cyberstrike/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/root/.local/bin:/opt/cyberstrike/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 从上游 release 拉取 tools/*.yaml（不存我们仓库，自动同步上游）
 ADD https://github.com/Ed1s0nZ/CyberStrikeAI/archive/refs/tags/${tools_version}.tar.gz /tmp/cyberstrike-src.tar.gz
@@ -106,8 +106,7 @@ RUN npm install -g @stoplight/spectral-cli 2>/dev/null || true; \
 RUN gem install zsteg one_gadget 2>/dev/null || true; \
     rm -rf /root/.gem 2>/dev/null || true
 
-# Layer 6: GitHub release / 源码编译 / Go 工具
-COPY --from=go-provider /usr/local/go /usr/local/go
+# Layer 6: GitHub release / Go 工具
 RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
         && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \
@@ -121,12 +120,9 @@ RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         && ln -sf /opt/libc-database/dump /usr/local/bin/libc-database-dump \
         && ln -sf /opt/libc-database/find /usr/local/bin/libc-database-find) 2>/dev/null || true; \
     ln -sf /usr/share/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless 2>/dev/null || true; \
-    GOBIN=/usr/local/bin /usr/local/go/bin/go install github.com/lc/gau/cmd/gau@latest 2>/dev/null || true; \
-    GOBIN=/usr/local/bin /usr/local/go/bin/go install github.com/bwall/HashPump@latest 2>/dev/null; \
-    (apt-get update && apt-get install -y --no-install-recommends libssl-dev 2>/dev/null \
-        && pip3 install --break-system-packages hlextend 2>/dev/null \
-        && printf '#!/bin/sh\nexec python3 -c "import hlextend; print(hlextend)"\n' > /usr/local/bin/hashpump \
-        && chmod +x /usr/local/bin/hashpump) 2>/dev/null || true; \
+    (cd /tmp && curl -fsSL -L -o gau.tar.gz \
+        "https://github.com/lc/gau/releases/latest/download/gau_linux_amd64.tar.gz" \
+        && tar xzf gau.tar.gz && mv gau /usr/local/bin/gau && rm -f gau.tar.gz) 2>/dev/null || true; \
     rm -rf /usr/local/go /root/go /var/lib/apt/lists/* /tmp/* 2>/dev/null || true
 
 # 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）

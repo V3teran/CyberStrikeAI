@@ -72,5 +72,24 @@ RUN apt-get update \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install zapcli 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 
-# 清理临时文件，只保留工具（Go 工具链不再需要，tools/ 保留供运行时参考）
-RUN rm -rf /usr/local/go /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true
+# 清理 Go 工具链（不再需要）
+RUN rm -rf /usr/local/go 2>/dev/null || true
+
+# 补齐 install-tools.sh 安装失败的 10 个工具
+RUN apt-get update \
+    # dotdotpwn (Perl)、enum4linux-ng、volatility3 — Kali 有包但 headless 可能没带
+    && apt-get install -y --no-install-recommends \
+        dotdotpwn enum4linux-ng volatility3 2>/dev/null || true; \
+    # kube-bench — GitHub release 二进制
+    (cd /tmp && curl -fsSL -o kube-bench.deb https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
+        && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \
+    # lightx — GitHub release 二进制
+    (cd /tmp && curl -fsSL -o lightx.tar.gz -L https://github.com/zyylhn/lightx/releases/latest/download/lightx_linux_amd64.tar.gz \
+        && tar xzf lightx.tar.gz -C /opt/cyberstrike/bin/ && rm -f lightx.tar.gz) 2>/dev/null || true; \
+    # Python 工具 — pip3 安装（best-effort）
+    pip3 install --break-system-packages --no-cache-dir \
+        angr checkov cloudmapper pacu prowler 2>/dev/null || true; \
+    rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
+
+# 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）
+RUN rm -rf /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true

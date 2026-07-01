@@ -83,8 +83,16 @@ RUN apt-get update \
         ghidra libc-database libc-database-dev 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
 
-# Layer 2: 需要 pip 安装的工具
-RUN pip3 install --break-system-packages --no-cache-dir \
+# Layer 2: Rust 编译器 (angr 依赖 rustworkx 需要)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal 2>/dev/null; \
+    export PATH="$HOME/.cargo/bin:$PATH"; \
+    rustc --version 2>/dev/null; \
+    rm -rf /root/.cargo/registry /root/.cargo/git 2>/dev/null || true
+
+# Layer 3: 需要 pip 安装的工具
+RUN export PATH="$HOME/.cargo/bin:$PATH"; \
+    pip3 install --break-system-packages --no-cache-dir \
         angr checkov prowler 2>/dev/null || true; \
     # enum4linux-ng (pip, apt 没有)
     pip3 install --break-system-packages --no-cache-dir enum4linux-ng 2>/dev/null || true; \
@@ -94,11 +102,11 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     pip3 install --break-system-packages --no-cache-dir pacu 2>/dev/null || true; \
     rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
-# Layer 3: 需要 npm 安装的工具
+# Layer 4: 需要 npm 安装的工具
 RUN npm install -g @stoplight/spectral-cli 2>/dev/null || true; \
     rm -rf /root/.npm /tmp/* 2>/dev/null || true
 
-# Layer 4: GitHub release 二进制 (kube-bench / lightx / clair / dotdotpwn)
+# Layer 5: GitHub release 二进制 (kube-bench / lightx / clair / dotdotpwn)
 RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
         https://github.com/aquasecurity/kube-bench/releases/download/v0.10.0/kube-bench_0.10.0_linux_amd64.deb \
         && dpkg -i kube-bench.deb && rm -f kube-bench.deb) 2>/dev/null || true; \

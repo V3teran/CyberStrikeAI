@@ -3,7 +3,7 @@
 # 主程序层：依赖 cyberstrike-tools 基础镜像，只添加 CSAI 二进制 + 前端 + 配置
 # 每次上游更新只需重建这一层（分钟级）
 
-ARG TOOLS_IMAGE=ghcr.io/v3teran/cyberstrikeai-tools:latest
+ARG TOOLS_IMAGE=ghcr.io/v3teran/offsec-tools:latest
 
 # ---- Stage 1: 编译 Go 主程序 ----
 FROM golang:1.24-bookworm AS app-builder

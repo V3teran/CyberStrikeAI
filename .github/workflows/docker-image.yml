@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          echo "image=ghcr.io/${owner}/cyberstrikeai-tools" >> "${GITHUB_OUTPUT}"
+          echo "image=ghcr.io/${owner}/offsec-tools" >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
         if: github.event_name != 'pull_request'
@@ -116,7 +116,7 @@ jobs:
         shell: bash
         run: |
           owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          echo "tools_image=ghcr.io/${owner}/cyberstrikeai-tools" >> "${GITHUB_OUTPUT}"
+          echo "tools_image=ghcr.io/${owner}/offsec-tools" >> "${GITHUB_OUTPUT}"
           echo "app_image=ghcr.io/${owner}/cyberstrikeai" >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU

@@ -9,6 +9,7 @@ import (
 	"cyberstrike-ai/internal/attackchain"
 	"cyberstrike-ai/internal/database"
 	"cyberstrike-ai/internal/project"
+	"cyberstrike-ai/internal/security"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -70,6 +71,10 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if session, ok := security.CurrentSession(c); ok {
+		_ = h.db.SetResourceOwner("project", created.ID, session.UserID)
+		_ = h.db.AssignResourceToUser(session.UserID, "project", created.ID)
+	}
 	c.JSON(http.StatusOK, created)
 }
 
@@ -82,7 +87,8 @@ func (h *ProjectHandler) GetDashboardSummary(c *gin.Context) {
 	if limit > 50 {
 		limit = 50
 	}
-	summary, err := h.db.GetProjectDashboardSummary(limit)
+	session, _ := security.CurrentSession(c)
+	summary, err := h.db.GetProjectDashboardSummaryForAccess(limit, session.UserID, session.Scope)
 	if err != nil {
 		h.logger.Error("获取项目仪表盘摘要失败", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -106,7 +112,8 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 	if limit > 500 {
 		limit = 500
 	}
-	list, err := h.db.ListProjects(status, search, limit, offset)
+	session, _ := security.CurrentSession(c)
+	list, err := h.db.ListProjectsForAccess(status, search, limit, offset, session.UserID, session.Scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -114,7 +121,7 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 	if list == nil {
 		list = []*database.Project{}
 	}
-	total, err := h.db.CountProjects(status, search)
+	total, err := h.db.CountProjectsForAccess(status, search, session.UserID, session.Scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -635,6 +642,12 @@ func (h *ProjectHandler) DeleteFactEdge(c *gin.Context) {
 func (h *ProjectHandler) PromoteAttackChain(c *gin.Context) {
 	projectID := c.Param("id")
 	conversationID := c.Param("conversationId")
+	session, ok := security.CurrentSession(c)
+	if !ok || !h.db.UserCanAccessResource(session.UserID, session.Scope, "project", projectID) ||
+		!h.db.UserCanAccessResource(session.UserID, session.Scope, "conversation", conversationID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问目标项目或来源对话"})
+		return
+	}
 	result, err := attackchain.PromoteToProject(h.db, projectID, conversationID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

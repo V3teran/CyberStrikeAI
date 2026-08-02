@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"cyberstrike-ai/internal/config"
+	"cyberstrike-ai/internal/security"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -73,7 +76,13 @@ func hitlInterruptRowToMap(
 }
 
 func (h *AgentHandler) buildHitlListQuery(logs bool) (string, []interface{}) {
-	q := `SELECT id, conversation_id, message_id, mode, tool_name, tool_call_id, payload, status, decision, decision_comment, COALESCE(decided_by,'human'), created_at, decided_at FROM hitl_interrupts WHERE 1=1`
+	where, args := h.buildHitlLogsWhere(logs)
+	q := `SELECT id, conversation_id, message_id, mode, tool_name, tool_call_id, payload, status, decision, decision_comment, COALESCE(decided_by,'human'), created_at, decided_at FROM hitl_interrupts` + where
+	return q, args
+}
+
+func (h *AgentHandler) buildHitlLogsWhere(logs bool) (string, []interface{}) {
+	q := " WHERE 1=1"
 	args := []interface{}{}
 	if logs {
 		q += " AND status != 'pending'"
@@ -155,6 +164,7 @@ func (h *AgentHandler) ListHITLLogs(c *gin.Context) {
 
 	q, args := h.buildHitlListQuery(true)
 	q, args = h.appendHitlListFilters(q, args, c)
+	q, args = appendConversationAccessSQL(q, args, "conversation_id", notificationAccessFromContext(c))
 	total, err := h.countHitlQuery(q, args)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -173,7 +183,67 @@ func (h *AgentHandler) ListHITLLogs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
+	c.JSON(http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total, "retentionDays": h.hitlRetentionDays()})
+}
+
+func (h *AgentHandler) hitlRetentionDays() int {
+	if h.config != nil {
+		return h.config.Hitl.RetentionDaysEffective()
+	}
+	return config.HitlConfig{}.RetentionDaysEffective()
+}
+
+// DeleteHITLLogs 批量删除或按筛选清空已决策的人机协同审计日志（不删除 pending）。
+func (h *AgentHandler) DeleteHITLLogs(c *gin.Context) {
+	var request struct {
+		IDs []string `json:"ids"`
+		All bool     `json:"all"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效: " + err.Error()})
+		return
+	}
+
+	var deleted int64
+	var err error
+	if request.All {
+		where, args := h.buildHitlLogsWhere(true)
+		where, args = h.appendHitlListFilters(where, args, c)
+		where, args = appendConversationAccessSQL(where, args, "conversation_id", notificationAccessFromContext(c))
+		deleted, err = h.db.DeleteHitlInterruptLogsMatching(where, args)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if h.audit != nil {
+			h.audit.RecordOK(c, "hitl", "logs_clear", "清空人机协同审计日志", "hitl_interrupt", "", map[string]interface{}{
+				"deleted": deleted,
+			})
+		}
+	} else {
+		if len(request.IDs) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "审计日志 ID 列表不能为空"})
+			return
+		}
+		ids, filterErr := h.filterAllowedHitlInterruptIDs(c, request.IDs)
+		if filterErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": filterErr.Error()})
+			return
+		}
+		deleted, err = h.db.DeleteHitlInterruptLogsByIDs(ids)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if h.audit != nil {
+			h.audit.RecordOK(c, "hitl", "logs_delete_batch", "批量删除人机协同审计日志", "hitl_interrupt", "", map[string]interface{}{
+				"count":   len(request.IDs),
+				"deleted": deleted,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功", "deleted": deleted})
 }
 
 func (h *AgentHandler) GetHITLLog(c *gin.Context) {
@@ -197,5 +267,65 @@ func (h *AgentHandler) GetHITLLog(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if !h.hitlConversationAllowed(c, cid) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该资源"})
+		return
+	}
 	c.JSON(http.StatusOK, hitlInterruptRowToMap(rowID, cid, mode, toolName, toolCallID, payload, rowStatus, decidedBy, messageID, decision, comment, createdAt, decidedAt))
+}
+
+func (h *AgentHandler) filterAllowedHitlInterruptIDs(c *gin.Context, ids []string) ([]string, error) {
+	clean := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		clean = append(clean, id)
+	}
+	if len(clean) == 0 {
+		return clean, nil
+	}
+	query := `SELECT id, conversation_id FROM hitl_interrupts WHERE id IN (` + buildPlaceholders(len(clean)) + `)`
+	args := make([]interface{}, 0, len(clean))
+	for _, id := range clean {
+		args = append(args, id)
+	}
+	rows, err := h.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	allowed := make([]string, 0, len(clean))
+	for rows.Next() {
+		var id, conversationID string
+		if err := rows.Scan(&id, &conversationID); err != nil {
+			continue
+		}
+		if h.hitlConversationAllowed(c, conversationID) {
+			allowed = append(allowed, id)
+		}
+	}
+	return allowed, rows.Err()
+}
+
+func (h *AgentHandler) hitlInterruptAllowed(c *gin.Context, interruptID string) bool {
+	var conversationID string
+	if err := h.db.QueryRow(`SELECT conversation_id FROM hitl_interrupts WHERE id = ?`, strings.TrimSpace(interruptID)).Scan(&conversationID); err != nil {
+		return false
+	}
+	return h.hitlConversationAllowed(c, conversationID)
+}
+
+func (h *AgentHandler) hitlConversationAllowed(c *gin.Context, conversationID string) bool {
+	session, ok := security.CurrentSession(c)
+	if !ok {
+		return false
+	}
+	return h.db.UserCanAccessResource(session.UserID, session.Scope, "conversation", conversationID)
 }

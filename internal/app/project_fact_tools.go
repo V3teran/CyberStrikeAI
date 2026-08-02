@@ -90,7 +90,7 @@ func registerProjectFactTools(mcpServer *mcp.Server, db *database.DB, cfg *confi
 					"description": "可选：关联的漏洞记录 ID",
 				},
 				"links": map[string]interface{}{
-					"type": "array",
+					"type":        "array",
 					"description": "可选：关系边（from → 当前 fact）。finding 至少 1 条 {from:target/*, type:discovered_on}；finding 上记录 exploit 用 {from:exploit/*, type:exploits}。省略保留已有边；传 [] 清空全部关系边。",
 					"items": map[string]interface{}{
 						"type": "object",
@@ -357,7 +357,7 @@ func registerProjectFactTools(mcpServer *mcp.Server, db *database.DB, cfg *confi
 	})
 
 	if logger != nil {
-		logger.Info("项目黑板 MCP 工具注册成功")
+		logger.Debug("项目黑板 MCP 工具注册成功")
 	}
 }
 

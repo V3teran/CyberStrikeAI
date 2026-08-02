@@ -4,9 +4,17 @@ package builtin
 // 所有代码中使用内置工具名称的地方都应该使用这些常量，而不是硬编码字符串
 const (
 	// 漏洞管理工具
-	ToolRecordVulnerability  = "record_vulnerability"
-	ToolListVulnerabilities  = "list_vulnerabilities"
-	ToolGetVulnerability     = "get_vulnerability"
+	ToolRecordVulnerability = "record_vulnerability"
+	ToolListVulnerabilities = "list_vulnerabilities"
+	ToolGetVulnerability    = "get_vulnerability"
+
+	// 资产管理工具
+	ToolCreateAsset       = "create_asset"
+	ToolGetAsset          = "get_asset"
+	ToolQueryAssets       = "query_assets"
+	ToolUpdateAsset       = "update_asset"
+	ToolDeleteAsset       = "delete_asset"
+	ToolCompleteAssetScan = "complete_asset_scan"
 
 	// 项目黑板（事实）工具
 	ToolUpsertProjectFact    = "upsert_project_fact"
@@ -22,6 +30,11 @@ const (
 
 	// 视觉分析（本地图片 → VL 模型 → 文本摘要）
 	ToolAnalyzeImage = "analyze_image"
+
+	// 长耗时工具执行控制（后台 execution 查询/等待/取消）
+	ToolGetToolExecution    = "get_tool_execution"
+	ToolWaitToolExecution   = "wait_tool_execution"
+	ToolCancelToolExecution = "cancel_tool_execution"
 
 	// WebShell 助手工具（AI 在 WebShell 管理 - AI 助手 中使用）
 	ToolWebshellExec      = "webshell_exec"
@@ -68,6 +81,12 @@ func IsBuiltinTool(toolName string) bool {
 	case ToolRecordVulnerability,
 		ToolListVulnerabilities,
 		ToolGetVulnerability,
+		ToolCreateAsset,
+		ToolGetAsset,
+		ToolQueryAssets,
+		ToolUpdateAsset,
+		ToolDeleteAsset,
+		ToolCompleteAssetScan,
 		ToolUpsertProjectFact,
 		ToolGetProjectFact,
 		ToolListProjectFacts,
@@ -77,6 +96,9 @@ func IsBuiltinTool(toolName string) bool {
 		ToolListKnowledgeRiskTypes,
 		ToolSearchKnowledgeBase,
 		ToolAnalyzeImage,
+		ToolGetToolExecution,
+		ToolWaitToolExecution,
+		ToolCancelToolExecution,
 		ToolWebshellExec,
 		ToolWebshellFileList,
 		ToolWebshellFileRead,
@@ -120,6 +142,12 @@ func GetAllBuiltinTools() []string {
 		ToolRecordVulnerability,
 		ToolListVulnerabilities,
 		ToolGetVulnerability,
+		ToolCreateAsset,
+		ToolGetAsset,
+		ToolQueryAssets,
+		ToolUpdateAsset,
+		ToolDeleteAsset,
+		ToolCompleteAssetScan,
 		ToolUpsertProjectFact,
 		ToolGetProjectFact,
 		ToolListProjectFacts,
@@ -129,6 +157,9 @@ func GetAllBuiltinTools() []string {
 		ToolListKnowledgeRiskTypes,
 		ToolSearchKnowledgeBase,
 		ToolAnalyzeImage,
+		ToolGetToolExecution,
+		ToolWaitToolExecution,
+		ToolCancelToolExecution,
 		ToolWebshellExec,
 		ToolWebshellFileList,
 		ToolWebshellFileRead,

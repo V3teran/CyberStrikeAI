@@ -1,0 +1,44 @@
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local configuration and secrets
+config.yaml
+config.local.yaml
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# Build outputs
+cyberstrike-ai
+bin/
+dist/
+build/
+coverage.out
+coverage.html
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Go
+vendor/
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/

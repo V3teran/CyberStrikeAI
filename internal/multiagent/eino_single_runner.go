@@ -50,6 +50,7 @@ func RunEinoSingleChatModelAgent(
 	if ma == nil {
 		return nil, fmt.Errorf("eino single: multi_agent 配置为空")
 	}
+	runtimeUserMessage := prepareLatestUserMessageForModel(userMessage, appCfg, &ma.EinoMiddleware, conversationID, logger)
 
 	einoLoc, einoSkillMW, einoFSTools, skillsRoot, einoErr := prepareEinoSkills(ctx, appCfg.SkillsDir, ma, logger)
 	if einoErr != nil {
@@ -81,7 +82,7 @@ func RunEinoSingleChatModelAgent(
 	}
 
 	toolInvokeNotify := einomcp.NewToolInvokeNotifyHolder()
-	einoExecBegin, einoExecFinish := newEinoExecuteMonitorCallbacks(ag, recorder)
+	einoExecBegin, einoExecAppendPartial, einoExecRegisterCancel, einoExecUnregisterCancel, einoExecFinish := newEinoExecuteMonitorCallbacks(ctx, ag, recorder)
 	mainDefs := ag.ToolsForRole(roleTools)
 	mainTools, err := einomcp.ToolsFromDefinitions(ag, holder, mainDefs, recorder, nil, toolInvokeNotify, einoSingleAgentName)
 	if err != nil {
@@ -110,11 +111,13 @@ func RunEinoSingleChatModelAgent(
 	httpClient = openai.NewEinoHTTPClient(&appCfg.OpenAI, httpClient)
 	openai.AttachSummarizationDiagTransport(httpClient, logger)
 
+	maxCompletionTokens := appCfg.OpenAI.MaxCompletionTokensEffective()
 	baseModelCfg := &einoopenai.ChatModelConfig{
-		APIKey:     appCfg.OpenAI.APIKey,
-		BaseURL:    strings.TrimSuffix(appCfg.OpenAI.BaseURL, "/"),
-		Model:      appCfg.OpenAI.Model,
-		HTTPClient: httpClient,
+		APIKey:              appCfg.OpenAI.APIKey,
+		BaseURL:             strings.TrimSuffix(appCfg.OpenAI.BaseURL, "/"),
+		Model:               appCfg.OpenAI.Model,
+		HTTPClient:          httpClient,
+		MaxCompletionTokens: &maxCompletionTokens,
 	}
 	reasoning.ApplyToEinoChatModelConfig(baseModelCfg, &appCfg.OpenAI, reasoningClient)
 
@@ -136,7 +139,7 @@ func RunEinoSingleChatModelAgent(
 	}
 	if einoSkillMW != nil {
 		if einoFSTools && einoLoc != nil {
-			fsMw, fsErr := subAgentFilesystemMiddleware(ctx, einoLoc, toolInvokeNotify, einoSingleAgentName, einoExecBegin, einoExecFinish, agentToolTimeoutMinutes(appCfg), agentShellNoOutputTimeoutSeconds(appCfg), nil)
+			fsMw, fsErr := subAgentFilesystemMiddleware(ctx, einoLoc, toolInvokeNotify, einoSingleAgentName, einoExecBegin, einoExecAppendPartial, einoExecRegisterCancel, einoExecUnregisterCancel, einoExecFinish, agentToolTimeoutMinutes(appCfg), agentToolWaitTimeoutSeconds(appCfg), agentShellNoOutputTimeoutSeconds(appCfg), nil)
 			if fsErr != nil {
 				return nil, fmt.Errorf("eino single filesystem 中间件: %w", fsErr)
 			}
@@ -145,12 +148,15 @@ func RunEinoSingleChatModelAgent(
 		handlers = append(handlers, einoSkillMW)
 	}
 	handlers = appendEinoChatModelTailMiddlewares(handlers, einoChatModelTailConfig{
-		logger:         logger,
-		phase:          "eino_single",
-		summarization:  mainSumMw,
-		modelName:      appCfg.OpenAI.Model,
-		conversationID: conversationID,
-		trace:          modelFacingTrace,
+		logger:           logger,
+		phase:            "eino_single",
+		summarization:    mainSumMw,
+		modelName:        appCfg.OpenAI.Model,
+		maxTotalTokens:   appCfg.OpenAI.MaxTotalTokens,
+		toolMaxBytes:     toolMaxBytesFromMW(&ma.EinoMiddleware),
+		conversationID:   conversationID,
+		trace:            modelFacingTrace,
+		middlewareConfig: &ma.EinoMiddleware,
 	})
 
 	maxIter := agentMaxIterations(appCfg)
@@ -160,6 +166,8 @@ func RunEinoSingleChatModelAgent(
 			Tools:               mainToolsForCfg,
 			UnknownToolsHandler: einomcp.UnknownToolReminderHandler(),
 			ToolCallMiddlewares: []compose.ToolMiddleware{
+				modelOutputExecutionGuardMiddleware(),
+				localToolRBACMiddleware(),
 				hitlToolCallMiddleware(),
 				softRecoveryToolMiddleware(),
 			},
@@ -201,7 +209,7 @@ func RunEinoSingleChatModelAgent(
 	}
 
 	baseMsgs := historyToMessages(history, appCfg, &ma.EinoMiddleware)
-	baseMsgs = appendUserMessageIfNeeded(baseMsgs, userMessage)
+	baseMsgs = appendUserMessageIfNeeded(baseMsgs, runtimeUserMessage)
 
 	streamsMainAssistant := func(agent string) bool {
 		return agent == "" || agent == einoSingleAgentName
@@ -232,6 +240,9 @@ func RunEinoSingleChatModelAgent(
 		DA:                      chatAgent,
 		ModelFacingTrace:        modelFacingTrace,
 		EinoCallbacks:           &ma.EinoCallbacks,
+		MaxTotalTokens:          appCfg.OpenAI.MaxTotalTokens,
+		ToolMaxBytes:            toolMaxBytesFromMW(&ma.EinoMiddleware),
+		ModelName:               appCfg.OpenAI.Model,
 		EmptyResponseMessage: "(Eino ADK single-agent session completed but no assistant text was captured. Check process details or logs.) " +
 			"（Eino ADK 单代理会话已完成，但未捕获到助手文本输出。请查看过程详情或日志。）",
 	}, baseMsgs)

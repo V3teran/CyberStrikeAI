@@ -12,7 +12,7 @@ on:
       upstream_version:
         description: "上游 CyberStrikeAI 版本 (Tools 镜像 tools/*.yaml 来源)"
         required: false
-        default: "v1.6.47"
+        default: "v1.7.11"
 
 permissions:
   contents: read
@@ -74,7 +74,7 @@ jobs:
           tags: |
             type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ inputs.upstream_version || 'v1.6.47' }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ inputs.upstream_version || 'v1.7.11' }},enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and publish Tools image
@@ -86,7 +86,7 @@ jobs:
           load: ${{ github.event_name == 'pull_request' }}
           platforms: linux/amd64
           build-args: |
-            tools_version=${{ inputs.upstream_version || 'v1.6.47' }}
+            tools_version=${{ inputs.upstream_version || 'v1.7.11' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=tools

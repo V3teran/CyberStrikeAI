@@ -3,7 +3,7 @@
 # 纯工具层：Kali + 全部安全工具，不含 CSAI 主程序
 # 独立维护，工具变动时才需要重建
 
-ARG tools_version=v1.6.47
+ARG tools_version=v1.7.11
 
 FROM golang:1.24-bookworm AS go-provider
 
@@ -54,6 +54,11 @@ RUN chmod +x /opt/cyberstrike/install-tools.sh \
     && (cd /opt/cyberstrike && ./install-tools.sh --no-sudo || true) \
     && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
 
+# CSAI 主程序运行时依赖的 Python 库（api-fuzzer/dnslog/http-intruder/http-framework-test 等工具脚本需要）
+COPY requirements.txt /opt/cyberstrike/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir -r /opt/cyberstrike/requirements.txt \
+    && rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
 # 补齐 install-tools.sh 覆盖不到 / 装错的工具
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gdb feroxbuster 2>/dev/null; \
@@ -63,6 +68,7 @@ RUN apt-get update \
     /opt/cyberstrike/bin/nuclei -update-templates 2>/dev/null || true; \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/devanshbatham/paramspider.git' 2>/dev/null || true; \
     (git clone --depth 1 https://github.com/maurosoria/dirsearch.git /opt/dirsearch \
+        && pip3 install --break-system-packages --no-cache-dir -r /opt/dirsearch/requirements.txt \
         && printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
         && chmod +x /opt/cyberstrike/bin/dirsearch) 2>/dev/null || true; \
     (cd /tmp && curl -sSL -o rustscan.deb.zip https://github.com/bee-san/RustScan/releases/download/2.4.1/rustscan.deb.zip \
@@ -70,12 +76,21 @@ RUN apt-get update \
     (cd /tmp && curl -fsSL -o fscan https://github.com/shadow1ng/fscan/releases/download/v2.1.3/fscan_2.1.3_linux_x64 \
         && chmod +x fscan && mv fscan /opt/cyberstrike/bin/fscan) 2>/dev/null || true; \
     (git clone --depth 1 https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool \
-        && pip3 install --break-system-packages --no-cache-dir -r /opt/jwt_tool/requirements.txt 2>/dev/null; \
-        printf '#!/bin/sh\nexec python3 /opt/jwt_tool/jwt_tool.py "$@"\n' > /opt/cyberstrike/bin/jwt_tool \
+        && pip3 install --break-system-packages --no-cache-dir -r /opt/jwt_tool/requirements.txt \
+        && printf '#!/bin/sh\nexec python3 /opt/jwt_tool/jwt_tool.py "$@"\n' > /opt/cyberstrike/bin/jwt_tool \
         && chmod +x /opt/cyberstrike/bin/jwt_tool) 2>/dev/null || true; \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install 'git+https://github.com/swisskyrepo/GraphQLmap.git' 2>/dev/null || true; \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/opt/cyberstrike/bin pipx install zapcli 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /root/.cache /tmp/* 2>/dev/null || true
+
+# 渗透测试常用 Python 依赖预装（requirements.txt/工具映射表未覆盖，防止事件驱动才发现缺失）
+RUN pip3 install --break-system-packages --no-cache-dir \
+        scapy paramiko dnspython python-nmap \
+        pycryptodome cryptography \
+        beautifulsoup4 lxml pyjwt \
+        websocket-client colorama pyyaml \
+    2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
 # Go 工具链保留在镜像中（gau/hashpump 等工具需要 go install 维护）
 

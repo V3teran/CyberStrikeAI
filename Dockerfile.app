@@ -57,7 +57,7 @@ COPY config.docker.yaml ./config.example.yaml
 COPY scripts/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # 安装 Python 运行时依赖（tools 镜像不包含这些）
-RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>/dev/null || true \
+RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt \
     && rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
 RUN mkdir -p runtime-config data tmp \

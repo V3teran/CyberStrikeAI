@@ -4,13 +4,13 @@
 #   2. cyberstrikeai      (主程序层) — 每次上游更新重建，依赖 tools 层
 #
 # 离线部署步骤：
-#   docker load < cyberstrikeai-tools-v1.6.47.tar.gz   # 加载工具层（仅首次/工具更新时）
-#   docker load < cyberstrikeai-v1.6.47.tar.gz         # 加载主程序层（每次版本更新）
+#   docker load < cyberstrikeai-tools-v1.7.11.tar.gz   # 加载工具层（仅首次/工具更新时）
+#   docker load < cyberstrikeai-v1.7.11.tar.gz         # 加载主程序层（每次版本更新）
 #   docker compose up -d
 
 services:
   cyberstrikeai:
-    image: ghcr.io/v3teran/cyberstrikeai:latest
+    image: cyberstrikeai:latest
     container_name: cyberstrikeai
     restart: unless-stopped
     ports:

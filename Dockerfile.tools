@@ -5,7 +5,7 @@
 
 ARG tools_version=v1.7.11
 
-FROM golang:1.24-bookworm AS go-provider
+FROM golang:1.25-bookworm AS go-provider
 
 FROM kalilinux/kali-rolling
 

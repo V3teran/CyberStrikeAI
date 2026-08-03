@@ -6,7 +6,7 @@
 ARG TOOLS_IMAGE=ghcr.io/v3teran/offsec-tools:latest
 
 # ---- Stage 1: 编译 Go 主程序 ----
-FROM golang:1.24-bookworm AS app-builder
+FROM golang:1.25-bookworm AS app-builder
 
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}

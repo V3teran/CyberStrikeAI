@@ -168,10 +168,11 @@ RUN pip3 install --break-system-packages --no-cache-dir yara-python lief 2>/dev/
     pip3 install --break-system-packages --no-cache-dir keystone-engine 2>/dev/null || true; \
     rm -rf /root/.cache /tmp/* 2>/dev/null || true
 
-# dirsearch wrapper 修复（确保 wrapper 脚本存在，即使旧缓存层未创建）
-RUN if [ -d /opt/dirsearch ] && [ ! -f /opt/cyberstrike/bin/dirsearch ]; then \
-        pip3 install --break-system-packages --no-cache-dir -r /opt/dirsearch/requirements.txt 2>/dev/null || true; \
-    fi \
-    && mkdir -p /opt/cyberstrike/bin \
+# dirsearch 依赖 + wrapper（只装 Kali apt 没有的包，避免版本冲突）
+RUN pip3 install --break-system-packages --no-cache-dir \
+        requests-ntlm requests-toolbelt httpx-ntlm defusedcsv \
+    2>/dev/null || true; \
+    mkdir -p /opt/cyberstrike/bin \
     && printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
-    && chmod +x /opt/cyberstrike/bin/dirsearch
+    && chmod +x /opt/cyberstrike/bin/dirsearch \
+    && rm -rf /root/.cache /tmp/* 2>/dev/null || true

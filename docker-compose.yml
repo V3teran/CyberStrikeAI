@@ -20,7 +20,7 @@ services:
       - ./runtime-config:/app/runtime-config
       - ./data:/app/data
       - ./tmp:/app/tmp
-    # Uncomment if you need raw-socket or advanced scan modes.
-    # cap_add:
-    #   - NET_ADMIN
-    #   - NET_RAW
+    # Raw-socket / advanced scan modes (nmap -sS, -O, -A etc.)
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW

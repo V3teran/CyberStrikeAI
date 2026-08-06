@@ -120,15 +120,35 @@ jobs:
               fi
             done
 
-            # Python 关键依赖
-            for pkg in requests httpx scapy paramiko dnspython python-nmap \
-                        pycryptodome cryptography beautifulsoup4 lxml pyjwt \
-                        websocket-client colorama pyyaml \
-                        yara lief volatility3 frida objection boofuzz keystone_engine; do
+            # Python 关键依赖（注意: pip 包名 ≠ import 名）
+            for pkg in requests httpx scapy paramiko \
+                        Crypto lxml colorama \
+                        yara lief volatility3 frida; do
               if python3 -c "import $pkg" 2>/dev/null; then
                 echo "OK  import $pkg"
               else
                 echo "FAIL import $pkg"; fail=1
+              fi
+            done
+            # import 名与 pip 包名不同的包
+            for pair in \
+              "dns.resolver:dnspython" \
+              "nmap:python-nmap" \
+              "bs4:beautifulsoup4" \
+              "jwt:pyjwt" \
+              "websocket:websocket-client" \
+              "yaml:pyyaml" \
+              "keystone:keystone-engine" \
+              "objection:objection" \
+              "boofuzz:boofuzz" \
+              "defang:defang" \
+              "netaddr:netaddr"; do
+              mod="${pair%%:*}"
+              name="${pair##*:}"
+              if python3 -c "import $mod" 2>/dev/null; then
+                echo "OK  import $mod ($name)"
+              else
+                echo "FAIL import $mod ($name)"; fail=1
               fi
             done
 

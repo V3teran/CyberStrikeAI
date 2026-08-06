@@ -156,15 +156,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends php-cli 2>/dev/null \
     && rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 
-# 渗透测试进阶 Python 依赖（Kali apt 没有的包，pip 补齐；失败不阻断构建）
+# 渗透测试进阶 Python 依赖（Kali apt 没有的包，pip 补齐；每个包独立安装,一个失败不影响其他）
 # 注: pwntools/capstone/ropper/netaddr 等 Kali apt 已有，无需重复 pip 安装
-RUN pip3 install --break-system-packages --no-cache-dir \
-        yara-python lief \
-        wafw00f \
-        frida-tools objection \
-        volatility3 \
-        boofuzz \
-        netaddr defang \
-        keystone-engine \
-    2>/dev/null || true; \
+RUN pip3 install --break-system-packages --no-cache-dir yara-python lief 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir wafw00f 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir frida-tools 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir --ignore-installed objection 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir volatility3 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir boofuzz 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir netaddr defang 2>/dev/null || true; \
+    pip3 install --break-system-packages --no-cache-dir keystone-engine 2>/dev/null || true; \
     rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+# dirsearch wrapper 修复（旧缓存层可能未创建 wrapper 脚本）
+RUN if [ ! -f /opt/cyberstrike/bin/dirsearch ] && [ -f /opt/dirsearch/dirsearch.py ]; then \
+        pip3 install --break-system-packages --no-cache-dir -r /opt/dirsearch/requirements.txt 2>/dev/null || true; \
+        printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
+        && chmod +x /opt/cyberstrike/bin/dirsearch; \
+    fi

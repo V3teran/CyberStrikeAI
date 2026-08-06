@@ -92,6 +92,60 @@ jobs:
           cache-from: type=gha,scope=tools
           cache-to: type=gha,mode=max,scope=tools
 
+      - name: Verify Tools image
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Pulling image for verification (GHA cache makes this fast)..."
+          docker pull ${{ steps.prep.outputs.image }}:latest
+          echo "=== Smoke tests ==="
+          docker run --rm ${{ steps.prep.outputs.image }}:latest sh -c '
+            set -e
+            fail=0
+
+            # 语言运行时
+            for bin in python3 php go ruby gem node npm java; do
+              if command -v "$bin" >/dev/null 2>&1; then
+                echo "OK  $bin: $(command -v $bin)"
+              else
+                echo "FAIL $bin: not found"; fail=1
+              fi
+            done
+
+            # 安全工具二进制
+            for bin in nmap nuclei katana subfinder feroxbuster fscan gau dirsearch; do
+              if command -v "$bin" >/dev/null 2>&1; then
+                echo "OK  $bin: $(command -v $bin)"
+              else
+                echo "FAIL $bin: not found"; fail=1
+              fi
+            done
+
+            # Python 关键依赖
+            for pkg in requests httpx scapy paramiko dnspython python-nmap \
+                        pycryptodome cryptography beautifulsoup4 lxml pyjwt \
+                        websocket-client colorama pyyaml \
+                        yara lief volatility3 frida objection boofuzz keystone_engine; do
+              if python3 -c "import $pkg" 2>/dev/null; then
+                echo "OK  import $pkg"
+              else
+                echo "FAIL import $pkg"; fail=1
+              fi
+            done
+
+            # PHP 可用性
+            if php -v 2>/dev/null | head -1; then
+              echo "OK  php -v"
+            else
+              echo "FAIL php -v"; fail=1
+            fi
+
+            if [ $fail -ne 0 ]; then
+              echo "=== VERIFICATION FAILED ==="
+              exit 1
+            fi
+            echo "=== ALL CHECKS PASSED ==="
+          '
+
   # ---- App 主程序镜像（依赖 Tools 基础镜像）----
   app:
     runs-on: ubuntu-latest

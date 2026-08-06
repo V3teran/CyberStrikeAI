@@ -148,3 +148,23 @@ RUN (cd /tmp && curl -fsSL -o kube-bench.deb \
 
 # 清理 tools/ 定义文件和安装脚本（运行时由 App 层覆盖）
 RUN rm -rf /opt/cyberstrike/tools /opt/cyberstrike/install-tools.sh 2>/dev/null || true
+
+# ====== 以下为追加层，不影响上方缓存 ======
+
+# PHP CLI（部分 Web PoC/扫描器是 PHP 写的，Kali 默认不带 php-cli）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends php-cli 2>/dev/null \
+    && rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+
+# 渗透测试进阶 Python 依赖（Kali apt 没有的包，pip 补齐；失败不阻断构建）
+# 注: pwntools/capstone/ropper/netaddr 等 Kali apt 已有，无需重复 pip 安装
+RUN pip3 install --break-system-packages --no-cache-dir \
+        yara-python lief \
+        wafw00f \
+        frida-tools objection \
+        volatility3 \
+        boofuzz \
+        netaddr defang \
+        keystone-engine \
+    2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* 2>/dev/null || true

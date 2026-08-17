@@ -37,10 +37,9 @@ ENV APP_HOME=/app \
 
 WORKDIR ${APP_HOME}
 
-# tini (ENTRYPOINT 需要) + curl (HEALTHCHECK 需要)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends tini curl \
-    && rm -rf /var/lib/apt/lists/*
+# tini (ENTRYPOINT 需要), curl 已在 offsec-tools 基础镜像中
+RUN curl -fsSL https://github.com/krallin/tini/releases/download/v0.19.0/tini-amd64 -o /usr/local/bin/tini \
+    && chmod +x /usr/local/bin/tini
 
 # 从编译阶段复制主程序
 COPY --from=app-builder /out/cyberstrike-ai ./cyberstrike-ai

@@ -10,7 +10,7 @@
 
 services:
   cyberstrikeai:
-    image: cyberstrikeai:latest
+    image: ghcr.io/v3teran/cyberstrikeai:latest
     container_name: cyberstrikeai
     restart: unless-stopped
     ports:

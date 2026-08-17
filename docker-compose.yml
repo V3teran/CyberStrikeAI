@@ -12,13 +12,14 @@ services:
   cyberstrikeai:
     image: ghcr.io/v3teran/cyberstrikeai:latest
     container_name: cyberstrikeai
+    platform: linux/amd64
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "18080:8080"
       - "8081:8081"
     volumes:
-      - ./runtime-config:/app/runtime-config
-      - ./data:/app/data
+      - /Users/Xlbula/.csai/runtime-config:/app/runtime-config
+      - /Users/Xlbula/.csai/data:/app/data
       - ./tmp:/app/tmp
     # Raw-socket / advanced scan modes (nmap -sS, -O, -A etc.)
     cap_add:

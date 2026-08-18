@@ -176,3 +176,81 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     && printf '#!/bin/sh\nexec python3 /opt/dirsearch/dirsearch.py "$@"\n' > /opt/cyberstrike/bin/dirsearch \
     && chmod +x /opt/cyberstrike/bin/dirsearch \
     && rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+# ====== CTF & 渗透补充工具（互补不重复）======
+
+# pip 层：ROPgadget / gmpy2(Crypto CTF) / gmssl(国密) / tplmap(SSTI 自动利用)
+RUN pip3 install --break-system-packages --no-cache-dir \
+        ROPgadget gmpy2 gmssl \
+    2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+# apt 层：SecLists(最全字典) / stegseek(steghide 暴力破解)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends seclists stegseek 2>/dev/null \
+    && rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
+
+# git clone 层：tplmap / testssl.sh / pwndbg / cupp（逐个安装互不影响）
+RUN (git clone --depth 1 https://github.com/epinna/tplmap.git /opt/tplmap \
+    && pip3 install --break-system-packages --no-cache-dir -r /opt/tplmap/requirements.txt 2>/dev/null \
+    && printf '#!/bin/sh\nexec python3 /opt/tplmap/tplmap.py "$@"\n' > /opt/cyberstrike/bin/tplmap \
+    && chmod +x /opt/cyberstrike/bin/tplmap) 2>/dev/null || true; \
+    (git clone --depth 1 https://github.com/drwetter/testssl.sh.git /opt/testssl.sh \
+    && chmod +x /opt/testssl.sh/testssl.sh \
+    && ln -sf /opt/testssl.sh/testssl.sh /opt/cyberstrike/bin/testssl) 2>/dev/null || true; \
+    (git clone --depth 1 https://github.com/pwndbg/pwndbg.git /opt/pwndbg \
+    && cd /opt/pwndbg && ./setup.sh 2>/dev/null) || true; \
+    (git clone --depth 1 https://github.com/Mebus/cupp.git /opt/cupp \
+    && printf '#!/bin/sh\nexec python3 /opt/cupp/cupp.py "$@"\n' > /opt/cyberstrike/bin/cupp \
+    && chmod +x /opt/cyberstrike/bin/cupp) 2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+# GitHub release 二进制：chisel(隧道) / pspy(进程监控)
+RUN (cd /tmp && curl -fsSL -o chisel.gz \
+        https://github.com/jpillora/chisel/releases/download/v1.10.1/chisel_1.10.1_linux_amd64.gz \
+    && gunzip chisel.gz && chmod +x chisel && mv chisel /opt/cyberstrike/bin/chisel) 2>/dev/null || true; \
+    (cd /tmp && curl -fsSL -o pspy64 \
+        https://github.com/DominicBreuker/pspy/releases/download/v1.2.1/pspy64 \
+    && chmod +x pspy64 && mv pspy64 /opt/cyberstrike/bin/pspy) 2>/dev/null || true; \
+    rm -rf /tmp/* 2>/dev/null || true
+
+# 验证 ncat 是否已有（nmap 包通常包含）
+RUN which ncat 2>/dev/null || (apt-get update \
+    && apt-get install -y --no-install-recommends ncat 2>/dev/null \
+    && rm -rf /var/lib/apt/lists/* 2>/dev/null) || true
+
+# ====== 反编译 / 逆向工具补全 ======
+
+# jadx（Java/Android APK 反编译，CTF 逆向高频）
+RUN (cd /tmp && curl -fsSL -o jadx.zip \
+        https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip \
+    && unzip -q jadx.zip -d /opt/jadx \
+    && chmod +x /opt/jadx/bin/jadx /opt/jadx/bin/jadx-gui \
+    && ln -sf /opt/jadx/bin/jadx /opt/cyberstrike/bin/jadx) 2>/dev/null || true; \
+    rm -rf /tmp/* 2>/dev/null || true
+
+# apktool（Android APK 解包/重打包）
+RUN (cd /tmp && curl -fsSL -o apktool.jar \
+        https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
+    && mv apktool.jar /opt/apktool.jar \
+    && printf '#!/bin/sh\nexec java -jar /opt/apktool.jar "$@"\n' > /opt/cyberstrike/bin/apktool \
+    && chmod +x /opt/cyberstrike/bin/apktool) 2>/dev/null || true; \
+    rm -rf /tmp/* 2>/dev/null || true
+
+# cfr（命令行 Java 反编译器，Ghidra 太重时轻量替代）
+RUN (cd /tmp && curl -fsSL -o cfr.jar \
+        https://github.com/leibnitz27/cfr/releases/download/0.152/cfr-0.152.jar \
+    && mv cfr.jar /opt/cfr.jar \
+    && printf '#!/bin/sh\nexec java -jar /opt/cfr.jar "$@"\n' > /opt/cyberstrike/bin/cfr \
+    && chmod +x /opt/cyberstrike/bin/cfr) 2>/dev/null || true; \
+    rm -rf /tmp/* 2>/dev/null || true
+
+# Python 反编译 + JS 美化（pip 一次性装）
+RUN pip3 install --break-system-packages --no-cache-dir \
+        uncompyle6 jsbeautifier pycdc 2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* 2>/dev/null || true
+
+# cmake（C/C++ 构建，CTF pwn 编译依赖经常要）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake 2>/dev/null \
+    && rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true

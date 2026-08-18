@@ -254,3 +254,40 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake 2>/dev/null \
     && rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
+
+# ====== JDK 版本管理：留 JDK 25，补 JDK 8 + 11 ======
+
+# 移除多余的 JDK 21（Kali rolling 构建时 default-jdk-headless 和后续升级各装了一个）
+RUN apt-get update \
+    && apt-get remove -y openjdk-21-jdk openjdk-21-jdk-headless openjdk-21-jre openjdk-21-jre-headless 2>/dev/null || true \
+    && apt-get autoremove -y 2>/dev/null || true \
+    && rm -rf /var/lib/apt/lists/* /root/.cache 2>/dev/null || true
+
+# Adoptium Temurin JDK 8 + 11（tar 包解压到 /opt，不影响系统默认 JDK）
+RUN (cd /tmp && curl -fsSL -o temurin8.tar.gz \
+        "https://api.adoptium.net/v3/binary/latest/8/ga/linux/x64/jdk/hotspot/normal/eclipse?project=jdk" \
+    && mkdir -p /opt/jdk8 \
+    && tar xzf temurin8.tar.gz --strip-components=1 -C /opt/jdk8 \
+    && rm -f temurin8.tar.gz) 2>/dev/null || true; \
+    (cd /tmp && curl -fsSL -o temurin11.tar.gz \
+        "https://api.adoptium.net/v3/binary/latest/11/ga/linux/x64/jdk/hotspot/normal/eclipse?project=jdk" \
+    && mkdir -p /opt/jdk11 \
+    && tar xzf temurin11.tar.gz --strip-components=1 -C /opt/jdk11 \
+    && rm -f temurin11.tar.gz) 2>/dev/null || true; \
+    rm -rf /tmp/* 2>/dev/null || true
+
+# update-alternatives 注册多版本（默认 JDK 25）
+RUN update-alternatives --install /usr/bin/java java /opt/jdk8/bin/java 1000 2>/dev/null || true; \
+    update-alternatives --install /usr/bin/javac javac /opt/jdk8/bin/javac 1000 2>/dev/null || true; \
+    update-alternatives --install /usr/bin/java java /opt/jdk11/bin/java 1100 2>/dev/null || true; \
+    update-alternatives --install /usr/bin/javac javac /opt/jdk11/bin/javac 1100 2>/dev/null || true; \
+    # JDK 25 优先级最高，设为默认
+    J25_HOME=$(dirname $(dirname $(readlink -f /usr/bin/java 2>/dev/null || echo /usr/lib/jvm/java-25-openjdk-amd64/bin/java))) 2>/dev/null || true; \
+    update-alternatives --install /usr/bin/java java ${J25_HOME:-/usr/lib/jvm/java-25-openjdk-amd64}/bin/java 1200 2>/dev/null || true; \
+    update-alternatives --install /usr/bin/javac javac ${J25_HOME:-/usr/lib/jvm/java-25-openjdk-amd64}/bin/javac 1200 2>/dev/null || true || true
+
+# 快捷切换脚本：jdk8 / jdk11 / jdk25
+RUN printf '#!/bin/sh\nexport JAVA_HOME=/opt/jdk8\nexport PATH=$JAVA_HOME/bin:$PATH\necho "Switched to JDK 8: $(java -version 2>&1 | head -1)"\n' > /usr/local/bin/jdk8 \
+    && printf '#!/bin/sh\nexport JAVA_HOME=/opt/jdk11\nexport PATH=$JAVA_HOME/bin:$PATH\necho "Switched to JDK 11: $(java -version 2>&1 | head -1)"\n' > /usr/local/bin/jdk11 \
+    && printf '#!/bin/sh\nexport JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64\nexport PATH=$JAVA_HOME/bin:$PATH\necho "Switched to JDK 25: $(java -version 2>&1 | head -1)"\n' > /usr/local/bin/jdk25 \
+    && chmod +x /usr/local/bin/jdk8 /usr/local/bin/jdk11 /usr/local/bin/jdk25

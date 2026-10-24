@@ -3,7 +3,7 @@
 # 纯工具层：Kali + 全部安全工具，不含 CSAI 主程序
 # 独立维护，工具变动时才需要重建
 
-ARG tools_version=v1.7.11
+ARG tools_version=v1.7.24
 
 FROM golang:1.25-bookworm AS go-provider
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	schemaopenai "github.com/cloudwego/eino/schema/openai"
 )
 
 func TestNewEinoAgenticSummarizationMiddlewareCompactsWithNativeTypedMiddleware(t *testing.T) {
@@ -18,7 +19,8 @@ func TestNewEinoAgenticSummarizationMiddlewareCompactsWithNativeTypedMiddleware(
 	emit := false
 	summaryModel := &capturingAgenticChatModel{
 		output: &schema.AgenticMessage{
-			Role: schema.AgenticRoleTypeAssistant,
+			Role:         schema.AgenticRoleTypeAssistant,
+			ResponseMeta: &schema.AgenticResponseMeta{OpenAIExtension: &schemaopenai.ResponseMetaExtension{Status: schemaopenai.ResponseStatusCompleted}},
 			ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.AssistantGenText{Text: `<analysis>检查历史</analysis>
 <summary>
 ## 1. 授权范围与约束
@@ -162,12 +164,75 @@ func TestEinoAgenticChatModelAgentCompactsContextBeforeBusinessModel(t *testing.
 	if strings.Contains(joined, "<analysis>") {
 		t.Fatalf("analysis leaked to business model input:\n%s", joined)
 	}
-	if strings.Count(joined, "原始扫描输出SHOULD_NOT_REACH_BUSINESS_MODEL") > 3 {
+	if strings.Count(stripOriginalUserIntentLedgerFromText(joined), "原始扫描输出SHOULD_NOT_REACH_BUSINESS_MODEL") > 3 {
 		t.Fatalf("raw oversized history leaked to business model input, count=%d", strings.Count(joined, "原始扫描输出SHOULD_NOT_REACH_BUSINESS_MODEL"))
 	}
+	// The synthetic history is a human message: keep its bounded original
+	// prefix in the host ledger, while excluding the oversized transcript from
+	// the business-model working context and persistence.
+	body := userIntentLedgerBlockRegex.FindStringSubmatch(joined)
+	if len(body) < 2 || !strings.Contains(body[1], "授权范围 example.com") || utf8RuneLen(strings.TrimSpace(body[1])) > modelFacingRuneBudget(appCfg.OpenAI.MaxTotalTokens, 0.20) {
+		t.Fatalf("human ledger missing or exceeds current budget: %#v", body)
+	}
+	if utf8RuneLen(joined) >= utf8RuneLen(rawHistory)/10 {
+		t.Fatal("oversized human transcript was reinjected")
+	}
 	traceJoined := joinClassicMessageContent(trace.Snapshot())
-	if !strings.Contains(traceJoined, "继续验证 SQL 注入路径") || strings.Count(traceJoined, "原始扫描输出SHOULD_NOT_REACH_BUSINESS_MODEL") > 3 {
+	if !strings.Contains(traceJoined, "继续验证 SQL 注入路径") || strings.Count(stripOriginalUserIntentLedgerFromText(traceJoined), "原始扫描输出SHOULD_NOT_REACH_BUSINESS_MODEL") > 3 {
 		t.Fatalf("model-facing trace not compacted:\n%s", traceJoined)
+	}
+}
+
+func TestEinoAgenticSummarizationMiddlewareRetriesWhenSummaryModelReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	emit := false
+	summaryModel := &capturingAgenticChatModel{
+		outputs: []*schema.AgenticMessage{
+			agenticAssistantTextMessage(""),
+			agenticAssistantTextMessage("<summary>有效摘要：继续验证 SQL 注入路径</summary>"),
+		},
+	}
+	appCfg := &config.Config{}
+	appCfg.OpenAI.Model = "gpt-4o"
+	appCfg.OpenAI.MaxTotalTokens = 5000
+	appCfg.Database.Path = filepath.Join(t.TempDir(), "cyberstrike.db")
+	mwCfg := &config.MultiAgentEinoMiddlewareConfig{
+		SummarizationEmitInternalEvents:  &emit,
+		SummarizationOutputReserveTokens: 1024,
+	}
+
+	mw, err := newEinoAgenticSummarizationMiddleware(ctx, summaryModel, appCfg, mwCfg, "conv-agentic-empty-summary", nil, "", nil)
+	if err != nil {
+		t.Fatalf("newEinoAgenticSummarizationMiddleware: %v", err)
+	}
+	state := &adk.TypedChatModelAgentState[*schema.AgenticMessage]{
+		Messages: []*schema.AgenticMessage{
+			schema.SystemAgenticMessage("system root"),
+			schema.UserAgenticMessage("授权范围 example.com\n" + strings.Repeat("历史扫描输出 ", 12000)),
+			agenticAssistantTextMessage("已记录范围"),
+			schema.UserAgenticMessage("继续验证 SQL 注入路径"),
+		},
+	}
+
+	_, after, err := mw.BeforeModelRewriteState(ctx, state, nil)
+	if err != nil {
+		t.Fatalf("BeforeModelRewriteState should retry instead of failing on empty summary: %v", err)
+	}
+	if after == nil {
+		t.Fatal("after state is nil")
+	}
+	if inputs := summaryModel.snapshotInputs(); len(inputs) < 2 {
+		t.Fatalf("summary model calls=%d, want retry after empty output", len(inputs))
+	}
+	joined := joinClassicMessageContent(AgenticMessagesToEino(after.Messages))
+	for _, want := range []string{"有效摘要", "继续验证 SQL 注入路径", "原始用户输入与约束账本"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("retried compacted context missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "本地压缩摘要") {
+		t.Fatalf("local fallback should not be used:\n%s", joined)
 	}
 }
 
@@ -193,6 +258,7 @@ func TestAppendEinoAgenticChatModelTailMiddlewaresIncludesTypedSummarization(t *
 func agenticAssistantTextMessage(text string) *schema.AgenticMessage {
 	return &schema.AgenticMessage{
 		Role:          schema.AgenticRoleTypeAssistant,
+		ResponseMeta:  &schema.AgenticResponseMeta{OpenAIExtension: &schemaopenai.ResponseMetaExtension{Status: schemaopenai.ResponseStatusCompleted}},
 		ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.AssistantGenText{Text: text})},
 	}
 }

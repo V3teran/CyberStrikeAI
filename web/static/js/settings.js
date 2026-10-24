@@ -661,6 +661,13 @@ function switchSettingsSection(section) {
         return;
     }
 
+    // Unknown hash sections must not hide every settings panel.
+    const requestedContent = document.getElementById(`settings-section-${section}`);
+    if (!requestedContent) return;
+    if (window.location.hash.split('?')[0] === '#settings') {
+        history.replaceState(null, '', section === 'token-usage' ? '#settings?section=token-usage' : '#settings');
+    }
+
     // 更新导航项状态
     document.querySelectorAll('.settings-nav-item').forEach(item => {
         item.classList.remove('active');
@@ -679,6 +686,11 @@ function switchSettingsSection(section) {
         activeContent.classList.add('active');
         initSettingsCustomSelects(activeContent);
     }
+    if (section === 'token-usage' && typeof refreshTokenUsage === 'function') {
+        refreshTokenUsage();
+    } else if (typeof stopTokenUsageRequests === 'function') {
+        stopTokenUsageRequests();
+    }
 	if (section === 'robots' && typeof window.loadVulnerabilityAlertSubscription === 'function') {
 		window.loadVulnerabilityAlertSubscription();
 	}
@@ -687,6 +699,17 @@ function switchSettingsSection(section) {
     }
     if (section === 'audit' && typeof initAuditLogsSection === 'function') {
         setTimeout(initAuditLogsSection, 0);
+    }
+    if (section === 'storage' && typeof initStorageSection === 'function') {
+        setTimeout(initStorageSection, 0);
+    }
+    if (section === 'update') {
+        if (typeof loadUpdateConsole === 'function') {
+            loadUpdateConsole();
+        }
+    } else if (typeof stopUpdatePolling === 'function') {
+        // 离开更新分区就停掉进度轮询；服务端的任务照跑，回来时 loadUpdateConsole 会接着读。
+        stopUpdatePolling();
     }
 }
 
@@ -790,6 +813,11 @@ async function loadConfig(loadTools = true, options = {}) {
             hitlReviewerEl.value = reviewer === 'audit_agent' ? 'audit_agent' : 'human';
         }
         const hitlAuditModel = hitl.audit_model || {};
+        const hitlAuditBackendEl = document.getElementById('hitl-audit-backend');
+        if (hitlAuditBackendEl) {
+            const backend = String(hitl.audit_backend || '').trim().toLowerCase();
+            hitlAuditBackendEl.value = (backend === 'typesafe' || backend === 'jev') ? 'typesafe' : 'openai';
+        }
         const hitlAuditProviderEl = document.getElementById('hitl-audit-model-provider');
         if (hitlAuditProviderEl) {
             const provider = String(hitlAuditModel.provider || '').trim().toLowerCase();
@@ -816,6 +844,9 @@ async function loadConfig(loadTools = true, options = {}) {
         const hitlReviewEditPromptEl = document.getElementById('hitl-audit-agent-prompt-review-edit-settings');
         if (hitlReviewEditPromptEl) {
             hitlReviewEditPromptEl.value = hitl.audit_agent_prompt_review_edit || '';
+        }
+        if (typeof window.syncHitlAuditBackendUI === 'function') {
+            window.syncHitlAuditBackendUI();
         }
         
         // 填充Agent配置
@@ -1985,6 +2016,7 @@ async function applySettings() {
         const activeChannelId = normalizeAIChannelId(selectedAIChannelId || currentConfig.ai.default_channel || 'default');
         currentConfig.ai.channels[activeChannelId] = readAIChannelFromMainForm(activeChannelId);
         currentConfig.ai.default_channel = activeChannelId;
+        currentConfig.ai = normalizeAIConfigProviderProfiles(currentConfig.ai);
         renderAIChannelSelect();
         const activeChannel = currentConfig.ai.channels[activeChannelId] || {};
         const prevOpenai = activeChannel;
@@ -1999,7 +2031,7 @@ async function applySettings() {
                 return String(s || '').split(/[\n,，]/).map(v => v.trim()).filter(Boolean);
             };
         const config = {
-            ai: currentConfig.ai,
+            ai: normalizeAIConfigProviderProfiles(currentConfig.ai),
             vision: visionPayload,
             fofa: {
                 api_key: document.getElementById('fofa-api-key')?.value.trim() || '',
@@ -2019,6 +2051,7 @@ async function applySettings() {
             },
             hitl: {
                 ...prevHitl,
+                audit_backend: document.getElementById('hitl-audit-backend')?.value === 'typesafe' ? 'typesafe' : 'openai',
                 audit_model: {
                     ...(prevHitl.audit_model || {}),
                     provider: document.getElementById('hitl-audit-model-provider')?.value || '',
@@ -2533,6 +2566,43 @@ function normalizeAIChannelId(name) {
     return id || 'default';
 }
 
+function aiChannelBaseURLHost(baseUrl) {
+    const raw = String(baseUrl || '').trim();
+    if (!raw) return '';
+    try {
+        return new URL(raw).hostname.toLowerCase().replace(/^www\./, '');
+    } catch (e) {
+        try {
+            return new URL(`https://${raw.replace(/^\/+/, '')}`).hostname.toLowerCase().replace(/^www\./, '');
+        } catch (_) {
+            return '';
+        }
+    }
+}
+
+function isOfficialDeepSeekBaseURL(baseUrl) {
+    return aiChannelBaseURLHost(baseUrl) === 'api.deepseek.com';
+}
+
+function normalizeAIChannelProviderProfile(channel) {
+    if (!channel || typeof channel !== 'object') return channel;
+    if (isOfficialDeepSeekBaseURL(channel.base_url)) {
+        channel.reasoning = {
+            ...(channel.reasoning || {}),
+            profile: 'deepseek'
+        };
+    }
+    return channel;
+}
+
+function normalizeAIConfigProviderProfiles(ai) {
+    if (!ai || typeof ai !== 'object' || !ai.channels || typeof ai.channels !== 'object') return ai;
+    Object.keys(ai.channels).forEach((id) => {
+        ai.channels[id] = normalizeAIChannelProviderProfile(ai.channels[id] || {});
+    });
+    return ai;
+}
+
 function escapeAIChannelHtml(value) {
     return String(value == null ? '' : value)
         .replace(/&/g, '&amp;')
@@ -2559,13 +2629,13 @@ function ensureAIConfigShape(cfg) {
             reasoning: oa.reasoning || {}
         };
     }
-    return { default_channel: def, channels };
+    return normalizeAIConfigProviderProfiles({ default_channel: def, channels });
 }
 
 function readAIChannelFromMainForm(id) {
     const prev = currentConfig?.ai?.channels?.[id] || {};
     const maxCompletionTokens = parseInt(document.getElementById('openai-max-completion-tokens')?.value, 10) || 32768;
-    return {
+    return normalizeAIChannelProviderProfile({
         ...prev,
         name: (document.getElementById('ai-channel-name')?.value || '').trim() || prev.name || id,
         provider: document.getElementById('openai-provider')?.value || 'openai',
@@ -2581,7 +2651,7 @@ function readAIChannelFromMainForm(id) {
             profile: document.getElementById('openai-reasoning-profile')?.value || 'auto',
             allow_client_reasoning: document.getElementById('openai-reasoning-allow-client')?.checked !== false
         }
-    };
+    });
 }
 
 function writeAIChannelToMainForm(id) {
@@ -2594,6 +2664,7 @@ function writeAIChannelToMainForm(id) {
     if (providerEl) {
         const provider = (ch.provider === 'openai' || !ch.provider) ? 'openai_compatible' : ch.provider;
         providerEl.value = provider;
+        syncSettingsCustomSelect(providerEl);
     }
     const keyEl = document.getElementById('openai-api-key');
     if (keyEl) keyEl.value = ch.api_key || '';
@@ -2607,11 +2678,20 @@ function writeAIChannelToMainForm(id) {
     if (maxCompletionTokensEl) maxCompletionTokensEl.value = ch.max_completion_tokens || 32768;
     const r = ch.reasoning || {};
     const modeEl = document.getElementById('openai-reasoning-mode');
-    if (modeEl) modeEl.value = ['auto', 'on', 'off'].includes(String(r.mode || '').toLowerCase()) ? String(r.mode).toLowerCase() : 'auto';
+    if (modeEl) {
+        modeEl.value = ['auto', 'on', 'off'].includes(String(r.mode || '').toLowerCase()) ? String(r.mode).toLowerCase() : 'auto';
+        syncSettingsCustomSelect(modeEl);
+    }
     const effEl = document.getElementById('openai-reasoning-effort');
-    if (effEl) effEl.value = ['', 'low', 'medium', 'high', 'max', 'xhigh'].includes(String(r.effort || '').toLowerCase()) ? String(r.effort || '').toLowerCase() : '';
+    if (effEl) {
+        effEl.value = ['', 'low', 'medium', 'high', 'max', 'xhigh'].includes(String(r.effort || '').toLowerCase()) ? String(r.effort || '').toLowerCase() : '';
+        syncSettingsCustomSelect(effEl);
+    }
     const profileEl = document.getElementById('openai-reasoning-profile');
-    if (profileEl) profileEl.value = ['auto', 'deepseek_compat', 'openai_compat', 'output_config_effort'].includes(String(r.profile || '').toLowerCase()) ? String(r.profile || '').toLowerCase() : 'auto';
+    if (profileEl) {
+        profileEl.value = ['auto', 'deepseek', 'deepseek_compat', 'openai_compat', 'output_config_effort'].includes(String(r.profile || '').toLowerCase()) ? String(r.profile || '').toLowerCase() : 'auto';
+        syncSettingsCustomSelect(profileEl);
+    }
     const allowEl = document.getElementById('openai-reasoning-allow-client');
     if (allowEl) allowEl.checked = r.allow_client_reasoning !== false;
     syncModelListFetchButtons();
@@ -2943,6 +3023,7 @@ async function persistAIChannelsToServer(successMessage, options = {}) {
                 currentConfig.ai.default_channel = latestAI.default_channel || id;
             }
         }
+        currentConfig.ai = normalizeAIConfigProviderProfiles(currentConfig.ai);
         const updateResponse = await apiFetch('/api/config', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -2971,6 +3052,7 @@ async function persistAIConfigOnlyToServer(successMessage) {
     if (typeof requirePermission === 'function' && !requirePermission('config:write')) return false;
     if (!currentConfig) return false;
     currentConfig.ai = ensureAIConfigShape(currentConfig);
+    currentConfig.ai = normalizeAIConfigProviderProfiles(currentConfig.ai);
     showAIChannelSaveHint(settingsT('settingsBasic.aiChannelSaving', '正在保存通道...'), true);
     try {
         const updateResponse = await apiFetch('/api/config', {
@@ -3137,6 +3219,7 @@ async function probeSelectedAIChannels() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     provider: ch.provider || 'openai_compatible',
+                    channel_id: id,
                     base_url: ch.base_url || '',
                     api_key: ch.api_key || '',
                     model: ch.model || ''
@@ -3236,6 +3319,15 @@ function initModelListControls() {
     if (hitlAuditProv && !hitlAuditProv.dataset.modelListBound) {
         hitlAuditProv.dataset.modelListBound = '1';
         hitlAuditProv.addEventListener('change', syncModelListFetchButtons);
+    }
+    const hitlAuditBackend = document.getElementById('hitl-audit-backend');
+    if (hitlAuditBackend && !hitlAuditBackend.dataset.backendBound) {
+        hitlAuditBackend.dataset.backendBound = '1';
+        hitlAuditBackend.addEventListener('change', function () {
+            syncHitlAuditBackendUI();
+            syncModelListFetchButtons();
+        });
+        syncHitlAuditBackendUI();
     }
     const knowledgeEmbeddingProv = document.getElementById('knowledge-embedding-provider');
     if (knowledgeEmbeddingProv && !knowledgeEmbeddingProv.dataset.modelListBound) {
@@ -3456,6 +3548,12 @@ function populateModelSelect(scope, models, currentValue) {
 async function fetchModelList(scope) {
     const tFn = typeof window.t === 'function' ? window.t : (k) => k;
     const creds = resolveModelListCredentials(scope);
+    creds.credential_scope = scope;
+    if (scope === 'openai') creds.channel_id = selectedAIChannelId;
+    const keyInputByScope = {vision: 'vision-api-key', hitlAudit: 'hitl-audit-model-api-key', knowledgeEmbedding: 'knowledge-embedding-api-key'};
+    if (keyInputByScope[scope] && !document.getElementById(keyInputByScope[scope])?.value.trim()) {
+        creds.channel_id = selectedAIChannelId;
+    }
     const modelListUiIds = {
         openai: {
             btnId: 'fetch-openai-models-btn',
@@ -3570,7 +3668,7 @@ async function testVisionConnection() {
         const response = await apiFetch('/api/config/test-vision', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ vision: vision, openai: openai })
+            body: JSON.stringify({ vision: vision, openai: openai, channel_id: selectedAIChannelId })
         });
         const result = await response.json();
         if (result.success) {
@@ -3587,6 +3685,48 @@ async function testVisionConnection() {
         resultEl.style.color = 'var(--error-color, #e53e3e)';
     }
 }
+
+function isHitlAuditTypeSafe() {
+    const v = (document.getElementById('hitl-audit-backend')?.value || '').trim().toLowerCase();
+    return v === 'typesafe' || v === 'jev';
+}
+
+function syncHitlAuditBackendUI() {
+    const ts = isHitlAuditTypeSafe();
+    const providerGroup = document.getElementById('hitl-audit-openai-provider-group');
+    if (providerGroup) providerGroup.style.display = ts ? 'none' : '';
+    const fetchBtn = document.getElementById('fetch-hitl-audit-models-btn');
+    if (fetchBtn) fetchBtn.style.display = ts ? 'none' : '';
+    const openaiHint = document.getElementById('hitl-audit-model-openai-hint');
+    const tsHint = document.getElementById('hitl-audit-model-typesafe-hint');
+    if (openaiHint) openaiHint.hidden = ts;
+    if (tsHint) tsHint.hidden = !ts;
+    const promptHint = document.getElementById('hitl-audit-prompt-typesafe-hint');
+    if (promptHint) promptHint.hidden = !ts;
+
+    const tFn = function (key, fallback) {
+        return typeof settingsT === 'function' ? settingsT(key, fallback) : (fallback || key);
+    };
+    const baseUrlEl = document.getElementById('hitl-audit-model-base-url');
+    const apiKeyEl = document.getElementById('hitl-audit-model-api-key');
+    const modelEl = document.getElementById('hitl-audit-model-name');
+    if (baseUrlEl) {
+        baseUrlEl.placeholder = ts
+            ? tFn('settings.hitl.auditModelTypeSafeBaseUrlPlaceholder', '留空使用 https://api.typesafe.ai')
+            : tFn('settings.hitl.auditModelBaseUrlPlaceholder', '留空则复用主模型 Base URL');
+    }
+    if (apiKeyEl) {
+        apiKeyEl.placeholder = ts
+            ? tFn('settings.hitl.auditModelTypeSafeApiKeyPlaceholder', 'TypeSafe API Key（必填，不复用主模型）')
+            : tFn('settings.hitl.auditModelApiKeyPlaceholder', '留空则复用主模型 API Key');
+    }
+    if (modelEl) {
+        modelEl.placeholder = ts
+            ? tFn('settings.hitl.auditModelTypeSafeNamePlaceholder', '留空使用 jev-latest')
+            : tFn('settings.hitl.auditModelNamePlaceholder', '留空则复用主模型；建议填写小模型');
+    }
+}
+window.syncHitlAuditBackendUI = syncHitlAuditBackendUI;
 
 function collectHitlAuditModelEffectiveConfig() {
     const main = {
@@ -3606,9 +3746,29 @@ function collectHitlAuditModelEffectiveConfig() {
 async function testHitlAuditModelConnection() {
     const btn = document.getElementById('test-hitl-audit-model-btn');
     const resultEl = document.getElementById('test-hitl-audit-model-result');
+    const typeSafe = isHitlAuditTypeSafe();
     const cfg = collectHitlAuditModelEffectiveConfig();
+    const apiKey = typeSafe
+        ? (document.getElementById('hitl-audit-model-api-key')?.value.trim() || '')
+        : cfg.api_key;
+    const baseUrl = typeSafe
+        ? (document.getElementById('hitl-audit-model-base-url')?.value.trim() || '')
+        : cfg.base_url;
+    const model = typeSafe
+        ? (document.getElementById('hitl-audit-model-name')?.value.trim() || 'jev-latest')
+        : cfg.model;
 
-    if (!cfg.base_url || !cfg.api_key || !cfg.model) {
+    if (typeSafe) {
+        if (!apiKey) {
+            if (resultEl) {
+                resultEl.style.color = 'var(--danger-color, #e53e3e)';
+                resultEl.textContent = typeof settingsT === 'function'
+                    ? settingsT('settings.hitl.testTypeSafeFillRequired', '请先填写 TypeSafe API Key')
+                    : '请先填写 TypeSafe API Key';
+            }
+            return;
+        }
+    } else if (!cfg.base_url || !cfg.api_key || !cfg.model) {
         if (resultEl) {
             resultEl.style.color = 'var(--danger-color, #e53e3e)';
             resultEl.textContent = typeof window.t === 'function' ? window.t('settingsBasic.testFillRequired') : '请先填写 Base URL、API Key 和模型';
@@ -3626,10 +3786,16 @@ async function testHitlAuditModelConnection() {
     }
 
     try {
-        const response = await apiFetch('/api/config/test-openai', {
+        const endpoint = typeSafe ? '/api/config/test-typesafe' : '/api/config/test-openai';
+        const payload = typeSafe
+            ? { base_url: baseUrl, api_key: apiKey, model: model }
+            : cfg;
+        payload.credential_scope = 'hitlAudit';
+        if (!document.getElementById('hitl-audit-model-api-key')?.value.trim()) payload.channel_id = selectedAIChannelId;
+        const response = await apiFetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(cfg)
+            body: JSON.stringify(payload)
         });
         const result = await response.json();
 
@@ -3749,6 +3915,7 @@ async function testOpenAIConnection() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 provider: provider,
+                channel_id: channelId,
                 base_url: baseUrl,
                 api_key: apiKey,
                 model: model
@@ -3915,6 +4082,28 @@ async function saveToolsConfig() {
     }
 }
 
+function setPasswordFieldError(input, message) {
+    if (!input) return;
+    input.classList.toggle('error', !!message);
+    input.setAttribute('aria-invalid', message ? 'true' : 'false');
+    const error = document.getElementById(input.id + '-error');
+    if (error) {
+        error.textContent = message || '';
+        error.hidden = !message;
+        input.setAttribute('aria-describedby', error.id);
+    }
+}
+
+function passwordValidationText(key, fallback) {
+    return typeof window.t === 'function' ? window.t('settingsSecurity.' + key) : fallback;
+}
+
+function clearPasswordFieldError(input) {
+    setPasswordFieldError(input, '');
+    const error = document.getElementById('password-form-error');
+    if (error) { error.textContent = ''; error.hidden = true; }
+}
+
 function resetPasswordForm() {
     const currentInput = document.getElementById('auth-current-password');
     const newInput = document.getElementById('auth-new-password');
@@ -3923,9 +4112,11 @@ function resetPasswordForm() {
     [currentInput, newInput, confirmInput].forEach(input => {
         if (input) {
             input.value = '';
-            input.classList.remove('error');
+            setPasswordFieldError(input, '');
         }
     });
+    const error = document.getElementById('password-form-error');
+    if (error) { error.textContent = ''; error.hidden = true; }
 }
 
 async function changePassword() {
@@ -3934,7 +4125,9 @@ async function changePassword() {
     const confirmInput = document.getElementById('auth-confirm-password');
     const submitBtn = document.querySelector('.change-password-submit');
 
-    [currentInput, newInput, confirmInput].forEach(input => input && input.classList.remove('error'));
+    [currentInput, newInput, confirmInput].forEach(input => setPasswordFieldError(input, ''));
+    const formError = document.getElementById('password-form-error');
+    if (formError) { formError.textContent = ''; formError.hidden = true; }
 
     const currentPassword = currentInput?.value.trim() || '';
     const newPassword = newInput?.value.trim() || '';
@@ -3943,22 +4136,22 @@ async function changePassword() {
     let hasError = false;
 
     if (!currentPassword) {
-        currentInput?.classList.add('error');
+        setPasswordFieldError(currentInput, passwordValidationText('currentRequired', '请输入当前密码'));
         hasError = true;
     }
 
     if (!newPassword || newPassword.length < 8) {
-        newInput?.classList.add('error');
+        setPasswordFieldError(newInput, passwordValidationText('newTooShort', '新密码至少需要 8 位'));
         hasError = true;
     }
 
     if (newPassword !== confirmPassword) {
-        confirmInput?.classList.add('error');
+        setPasswordFieldError(confirmInput, passwordValidationText('confirmMismatch', '两次输入的新密码不一致'));
         hasError = true;
     }
 
     if (hasError) {
-        alert(typeof window.t === 'function' ? window.t('settings.security.fillPasswordHint') : '请正确填写当前密码和新密码，新密码至少 8 位且需要两次输入一致。');
+        [currentInput, newInput, confirmInput].find(input => input && input.getAttribute('aria-invalid') === 'true')?.focus();
         return;
     }
 
@@ -3990,6 +4183,7 @@ async function changePassword() {
         closeSettings();
     } catch (error) {
         console.error('修改密码失败:', error);
+        if (formError) { formError.textContent = error.message; formError.hidden = false; }
         alert((typeof window.t === 'function' ? window.t('settings.security.changePasswordFailed') : '修改密码失败') + ': ' + error.message);
     } finally {
         if (submitBtn) {

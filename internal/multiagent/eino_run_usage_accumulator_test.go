@@ -49,16 +49,16 @@ func TestEinoRunUsageAccumulatorEmitOnce(t *testing.T) {
 		}
 	}
 
-	if !acc.EmitOnce("conv-1", "deep", "final", progress, nil) {
+	if !acc.EmitOnce("conv-1", "deep", "final", "gpt-test", progress, nil) {
 		t.Fatal("first emit should return true")
 	}
-	if acc.EmitOnce("conv-1", "deep", "partial", progress, nil) {
+	if acc.EmitOnce("conv-1", "deep", "partial", "gpt-test", progress, nil) {
 		t.Fatal("second emit should return false")
 	}
 	if len(events) != 1 {
 		t.Fatalf("events = %#v, want one usage summary", events)
 	}
-	if events[0]["conversationId"] != "conv-1" || events[0]["orchestration"] != "deep" || events[0]["reason"] != "final" || events[0]["totalTokens"] != 3 {
+	if events[0]["conversationId"] != "conv-1" || events[0]["orchestration"] != "deep" || events[0]["reason"] != "final" || events[0]["model"] != "gpt-test" || events[0]["totalTokens"] != 3 {
 		t.Fatalf("event = %#v", events[0])
 	}
 }
@@ -77,5 +77,27 @@ func TestMaxEinoTokenUsageUsesLargestStreamChunkValues(t *testing.T) {
 
 	if got.PromptTokens != 10 || got.CompletionTokens != 5 || got.TotalTokens != 14 || got.CompletionTokensDetails.ReasoningTokens != 3 {
 		t.Fatalf("usage = %#v", got)
+	}
+}
+
+func TestEinoRunUsageCacheWriteDoesNotInflateTotal(t *testing.T) {
+	acc := newEinoRunUsageAccumulator()
+	var stream *schema.TokenUsage
+	for i := 0; i < 2; i++ {
+		stream = maxEinoTokenUsage(stream, &schema.TokenUsage{
+			PromptTokens: 100, CompletionTokens: 20,
+			PromptTokenDetails:      schema.PromptTokenDetails{CachedTokens: 40, CacheWriteTokens: 30},
+			CompletionTokensDetails: schema.CompletionTokensDetails{ReasoningTokens: 10},
+		})
+	}
+	acc.AddUsage(stream)
+	got := acc.Summary()
+	if got.ModelCalls != 1 || got.TotalTokens != 120 || got.CacheWriteTokens != 30 || got.CachedTokens != 40 || got.ReasoningTokens != 10 {
+		t.Fatalf("summary = %#v", got)
+	}
+	var emitted map[string]interface{}
+	acc.EmitOnce("conv", "deep", "final", "claude-test", func(_, _ string, data interface{}) { emitted = data.(map[string]interface{}) }, nil)
+	if emitted["cacheWriteTokens"] != 30 || emitted["totalTokens"] != 120 {
+		t.Fatalf("event = %#v", emitted)
 	}
 }

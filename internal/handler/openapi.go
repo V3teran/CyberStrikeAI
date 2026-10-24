@@ -456,75 +456,6 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 						},
 					},
 				},
-				"Group": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"id": map[string]interface{}{
-							"type":        "string",
-							"description": "分组ID",
-						},
-						"name": map[string]interface{}{
-							"type":        "string",
-							"description": "分组名称",
-						},
-						"icon": map[string]interface{}{
-							"type":        "string",
-							"description": "分组图标",
-						},
-						"createdAt": map[string]interface{}{
-							"type":        "string",
-							"format":      "date-time",
-							"description": "创建时间",
-						},
-						"updatedAt": map[string]interface{}{
-							"type":        "string",
-							"format":      "date-time",
-							"description": "更新时间",
-						},
-					},
-				},
-				"CreateGroupRequest": map[string]interface{}{
-					"type":     "object",
-					"required": []string{"name"},
-					"properties": map[string]interface{}{
-						"name": map[string]interface{}{
-							"type":        "string",
-							"description": "分组名称",
-						},
-						"icon": map[string]interface{}{
-							"type":        "string",
-							"description": "分组图标（可选）",
-						},
-					},
-				},
-				"UpdateGroupRequest": map[string]interface{}{
-					"type":     "object",
-					"required": []string{"name"},
-					"properties": map[string]interface{}{
-						"name": map[string]interface{}{
-							"type":        "string",
-							"description": "分组名称",
-						},
-						"icon": map[string]interface{}{
-							"type":        "string",
-							"description": "分组图标",
-						},
-					},
-				},
-				"AddConversationToGroupRequest": map[string]interface{}{
-					"type":     "object",
-					"required": []string{"conversationId", "groupId"},
-					"properties": map[string]interface{}{
-						"conversationId": map[string]interface{}{
-							"type":        "string",
-							"description": "对话ID",
-						},
-						"groupId": map[string]interface{}{
-							"type":        "string",
-							"description": "分组ID",
-						},
-					},
-				},
 				"BatchTaskRequest": map[string]interface{}{
 					"type":     "object",
 					"required": []string{"tasks"},
@@ -677,6 +608,7 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 							"description": "修复建议",
 						},
 						"retest_notes": map[string]interface{}{"type": "string", "description": "复测方式"},
+						"retest_log":   map[string]interface{}{"type": "string", "description": "复测记录（只读，由复测流程追加）"},
 					},
 				},
 				"UpdateVulnerabilityRequest": map[string]interface{}{
@@ -1399,15 +1331,6 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 							"description": "按项目筛选；传 __none__ 表示仅未绑定项目的对话",
 							"schema": map[string]interface{}{
 								"type": "string",
-							},
-						},
-						{
-							"name":        "exclude_grouped",
-							"in":          "query",
-							"required":    false,
-							"description": "为 true 时排除已加入分组的对话（默认在未搜索且未按项目筛选时启用）",
-							"schema": map[string]interface{}{
-								"type": "boolean",
 							},
 						},
 						{
@@ -2308,290 +2231,6 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 						},
 						"404": map[string]interface{}{
 							"description": "任务不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups": map[string]interface{}{
-				"post": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "创建分组",
-					"description": "创建一个新的对话分组",
-					"operationId": "createGroup",
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": "#/components/schemas/CreateGroupRequest",
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "创建成功",
-							"content": map[string]interface{}{
-								"application/json": map[string]interface{}{
-									"schema": map[string]interface{}{
-										"$ref": "#/components/schemas/Group",
-									},
-								},
-							},
-						},
-						"400": map[string]interface{}{
-							"description": "请求参数错误或分组名称已存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-				"get": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "列出分组",
-					"description": "获取所有对话分组",
-					"operationId": "listGroups",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "获取成功",
-							"content": map[string]interface{}{
-								"application/json": map[string]interface{}{
-									"schema": map[string]interface{}{
-										"type": "array",
-										"items": map[string]interface{}{
-											"$ref": "#/components/schemas/Group",
-										},
-									},
-								},
-							},
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups/{id}": map[string]interface{}{
-				"get": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "获取分组",
-					"description": "获取指定分组的详细信息",
-					"operationId": "getGroup",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "获取成功",
-							"content": map[string]interface{}{
-								"application/json": map[string]interface{}{
-									"schema": map[string]interface{}{
-										"$ref": "#/components/schemas/Group",
-									},
-								},
-							},
-						},
-						"404": map[string]interface{}{
-							"description": "分组不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-				"put": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "更新分组",
-					"description": "更新分组信息",
-					"operationId": "updateGroup",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": "#/components/schemas/UpdateGroupRequest",
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "更新成功",
-							"content": map[string]interface{}{
-								"application/json": map[string]interface{}{
-									"schema": map[string]interface{}{
-										"$ref": "#/components/schemas/Group",
-									},
-								},
-							},
-						},
-						"400": map[string]interface{}{
-							"description": "请求参数错误或分组名称已存在",
-						},
-						"404": map[string]interface{}{
-							"description": "分组不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-				"delete": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "删除分组",
-					"description": "删除指定分组",
-					"operationId": "deleteGroup",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "删除成功",
-						},
-						"404": map[string]interface{}{
-							"description": "分组不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups/{id}/conversations": map[string]interface{}{
-				"get": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "获取分组中的对话",
-					"description": "获取指定分组中的所有对话",
-					"operationId": "getGroupConversations",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "获取成功",
-							"content": map[string]interface{}{
-								"application/json": map[string]interface{}{
-									"schema": map[string]interface{}{
-										"type": "array",
-										"items": map[string]interface{}{
-											"$ref": "#/components/schemas/Conversation",
-										},
-									},
-								},
-							},
-						},
-						"404": map[string]interface{}{
-							"description": "分组不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups/conversations": map[string]interface{}{
-				"post": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "添加对话到分组",
-					"description": "将对话添加到指定分组",
-					"operationId": "addConversationToGroup",
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": "#/components/schemas/AddConversationToGroupRequest",
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "添加成功",
-						},
-						"400": map[string]interface{}{
-							"description": "请求参数错误",
-						},
-						"404": map[string]interface{}{
-							"description": "对话或分组不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups/{id}/conversations/{conversationId}": map[string]interface{}{
-				"delete": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "从分组移除对话",
-					"description": "从指定分组中移除对话",
-					"operationId": "removeConversationFromGroup",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-						{
-							"name":        "conversationId",
-							"in":          "path",
-							"required":    true,
-							"description": "对话ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "移除成功",
-						},
-						"404": map[string]interface{}{
-							"description": "对话或分组不存在",
 						},
 						"401": map[string]interface{}{
 							"description": "未授权",
@@ -3780,6 +3419,59 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 					},
 				},
 			},
+			"/api/system/update/source": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "配置更新源（本安装从哪个仓库更新）",
+					"description": "把更新源写进 config.yaml 的 update 段：单个 repo 字段（仓库地址），更新跟随该仓库的默认分支。留空（或写空串）= 回到官方仓库 https://github.com/AIPentest/CyberStrikeAI.git。地址白名单为 https/http/ssh/git/file:// 与本机绝对路径（git 的 ext:: 传输会执行命令，一律拒绝）。",
+					"operationId": "saveUpdateSource",
+					"requestBody": map[string]interface{}{
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"repo": map[string]interface{}{"type": "string", "description": "更新源仓库地址；留空 = 官方仓库"},
+									},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "已保存（返回配置值与官方默认地址）"},
+						"400": map[string]interface{}{"description": "仓库地址不合法"},
+						"401": map[string]interface{}{"description": "未授权"},
+					},
+				},
+			},
+			"/api/system/update/adopt": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "把非 git 目录接入更新源",
+					"description": "解压/打包安装所在的目录接入配置好的更新源（未配置 = 官方仓库）：不带 confirm 做无副作用预览（在临时仓库里 fetch，列出会被目标版本替换的文件与会保留的运维者内容）；confirm=true 时异步执行（202 + job_id，用 /api/system/update/job 轮询）：git init、添加 origin、落地更新源默认分支的内容，运维者内容先暂存再放回，被替换的文件全部留底到 .update-backup/<时间戳>/overwritten/。已是 git 工作树时返回 409（用一键更新而不是接入）。",
+					"operationId": "adoptUpdateSource",
+					"requestBody": map[string]interface{}{
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"confirm": map[string]interface{}{"type": "boolean", "description": "false/缺省=只预览；true=确认执行"},
+										"restart": map[string]interface{}{"type": "boolean", "description": "接入成功后退出进程交给外部守护拉起，默认 false"},
+									},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "预览结果（plan：将被替换/保留的文件清单与总数）"},
+						"202": map[string]interface{}{"description": "接入任务已受理，返回 job_id"},
+						"400": map[string]interface{}{"description": "更新源地址不合法，或要求重启但没有重启钩子"},
+						"409": map[string]interface{}{"description": "目录已是 git 工作树；或有任务在进行中"},
+						"401": map[string]interface{}{"description": "未授权"},
+					},
+				},
+			},
 			"/api/config": map[string]interface{}{
 				"get": map[string]interface{}{
 					"tags":        []string{"配置管理"},
@@ -3826,6 +3518,103 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 						},
 						"401": map[string]interface{}{
 							"description": "未授权",
+						},
+					},
+				},
+			},
+			"/api/storage/meta": map[string]interface{}{
+				"get": map[string]interface{}{
+					"tags":        []string{"存储清理"},
+					"summary":     "获取存储清理策略",
+					"description": "返回自动清理开关、间隔、宽限窗口与全部清理类别的启用状态及保留天数",
+					"operationId": "getStorageMeta",
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "获取成功",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+						"403": map[string]interface{}{
+							"description": "缺少 storage:read 权限",
+						},
+					},
+				},
+			},
+			"/api/storage/status": map[string]interface{}{
+				"get": map[string]interface{}{
+					"tags":        []string{"存储清理"},
+					"summary":     "获取运行空间占用",
+					"description": "返回文件系统容量（含 inode）与各类别的占用、可回收量；结果按短 TTL 缓存",
+					"operationId": "getStorageStatus",
+					"parameters": []interface{}{
+						map[string]interface{}{
+							"name":        "refresh",
+							"in":          "query",
+							"description": "为 true 时强制重新遍历目录，绕过缓存",
+							"required":    false,
+							"schema":      map[string]interface{}{"type": "boolean"},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "获取成功",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+						"403": map[string]interface{}{
+							"description": "缺少 storage:read 权限",
+						},
+					},
+				},
+			},
+			"/api/storage/cleanup": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"存储清理"},
+					"summary":     "预览或执行运行空间清理",
+					"description": "默认 dry_run=true 只统计不删除；真实删除必须同时传 dry_run=false 与 confirm=true。仅处理已启用的类别，同一时刻只允许一轮执行",
+					"operationId": "runStorageCleanup",
+					"requestBody": map[string]interface{}{
+						"required": false,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"dry_run": map[string]interface{}{
+											"type":        "boolean",
+											"description": "省略时按 true 处理",
+										},
+										"confirm": map[string]interface{}{
+											"type":        "boolean",
+											"description": "dry_run=false 时必须为 true",
+										},
+										"categories": map[string]interface{}{
+											"type":        "array",
+											"description": "限定类别；省略表示全部已启用类别",
+											"items":       map[string]interface{}{"type": "string"},
+										},
+									},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "执行完成（或预览完成）",
+						},
+						"400": map[string]interface{}{
+							"description": "缺少 confirm、或类别键未注册",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+						"403": map[string]interface{}{
+							"description": "缺少 storage:write 权限",
+						},
+						"409": map[string]interface{}{
+							"description": "已有一轮清理在执行",
 						},
 					},
 				},
@@ -4259,109 +4048,6 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 						},
 						"404": map[string]interface{}{
 							"description": "对话不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups/{id}/pinned": map[string]interface{}{
-				"put": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "设置分组置顶",
-					"description": "设置或取消分组的置顶状态",
-					"operationId": "updateGroupPinned",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"type":     "object",
-									"required": []string{"pinned"},
-									"properties": map[string]interface{}{
-										"pinned": map[string]interface{}{
-											"type":        "boolean",
-											"description": "是否置顶",
-										},
-									},
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "更新成功",
-						},
-						"404": map[string]interface{}{
-							"description": "分组不存在",
-						},
-						"401": map[string]interface{}{
-							"description": "未授权",
-						},
-					},
-				},
-			},
-			"/api/groups/{id}/conversations/{conversationId}/pinned": map[string]interface{}{
-				"put": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "设置分组中对话的置顶",
-					"description": "设置或取消分组中对话的置顶状态",
-					"operationId": "updateConversationPinnedInGroup",
-					"parameters": []map[string]interface{}{
-						{
-							"name":        "id",
-							"in":          "path",
-							"required":    true,
-							"description": "分组ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-						{
-							"name":        "conversationId",
-							"in":          "path",
-							"required":    true,
-							"description": "对话ID",
-							"schema": map[string]interface{}{
-								"type": "string",
-							},
-						},
-					},
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"type":     "object",
-									"required": []string{"pinned"},
-									"properties": map[string]interface{}{
-										"pinned": map[string]interface{}{
-											"type":        "boolean",
-											"description": "是否置顶",
-										},
-									},
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "更新成功",
-						},
-						"404": map[string]interface{}{
-							"description": "对话或分组不存在",
 						},
 						"401": map[string]interface{}{
 							"description": "未授权",
@@ -5194,38 +4880,6 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 					},
 				},
 			},
-
-			// ==================== 对话分组 - 缺失端点 ====================
-			"/api/groups/mappings": map[string]interface{}{
-				"get": map[string]interface{}{
-					"tags":        []string{"对话分组"},
-					"summary":     "获取所有分组映射",
-					"description": "获取所有对话与分组之间的映射关系列表。",
-					"operationId": "getAllGroupMappings",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "获取成功",
-							"content": map[string]interface{}{
-								"application/json": map[string]interface{}{
-									"schema": map[string]interface{}{
-										"type": "array",
-										"items": map[string]interface{}{
-											"type": "object",
-											"properties": map[string]interface{}{
-												"conversation_id": map[string]interface{}{"type": "string", "description": "对话ID"},
-												"group_id":        map[string]interface{}{"type": "string", "description": "分组ID"},
-												"pinned":          map[string]interface{}{"type": "boolean", "description": "是否置顶"},
-											},
-										},
-									},
-								},
-							},
-						},
-						"401": map[string]interface{}{"description": "未授权"},
-					},
-				},
-			},
-
 			// ==================== FOFA信息收集 ====================
 			"/api/fofa/search": map[string]interface{}{
 				"post": map[string]interface{}{
@@ -5400,6 +5054,50 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 											"error":      map[string]interface{}{"type": "string", "description": "失败原因（success=false时）"},
 											"model":      map[string]interface{}{"type": "string", "description": "实际使用的模型（success=true时）"},
 											"latency_ms": map[string]interface{}{"type": "number", "description": "延迟毫秒数（success=true时）"},
+										},
+									},
+								},
+							},
+						},
+						"400": map[string]interface{}{"description": "参数错误"},
+						"401": map[string]interface{}{"description": "未授权"},
+					},
+				},
+			},
+			"/api/config/test-typesafe": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"配置管理"},
+					"summary":     "测试 TypeSafe Jev 连接",
+					"description": "发送一条最小 Noul 请求，验证 TypeSafe System One API Key 是否可用。",
+					"operationId": "testTypeSafe",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type":     "object",
+									"required": []string{"api_key"},
+									"properties": map[string]interface{}{
+										"base_url": map[string]interface{}{"type": "string", "description": "可选，默认 https://api.typesafe.ai"},
+										"api_key":  map[string]interface{}{"type": "string", "description": "TypeSafe API Key"},
+										"model":    map[string]interface{}{"type": "string", "description": "可选，默认 jev-latest", "example": "jev-latest"},
+									},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "测试结果",
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type": "object",
+										"properties": map[string]interface{}{
+											"success":    map[string]interface{}{"type": "boolean"},
+											"error":      map[string]interface{}{"type": "string"},
+											"model":      map[string]interface{}{"type": "string"},
+											"latency_ms": map[string]interface{}{"type": "number"},
 										},
 									},
 								},
@@ -6805,9 +6503,114 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 					},
 				},
 			},
+			"/api/system/update": map[string]interface{}{
+				"get": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "查看本安装的源码版本",
+					"description": "读取安装目录自己的 git 工作树（分支、远端、当前提交、本地改动、是否有 Go 工具链、是否有可回滚点），不发起任何网络请求",
+					"operationId": "getUpdateStatus",
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "安装状态与最近一次更新任务",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+					},
+				},
+			},
+			"/api/system/update/check": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "检查本安装的更新源有无新提交",
+					"description": "对配置的更新源仓库（未配置 = 官方仓库 https://github.com/AIPentest/CyberStrikeAI.git）的默认分支执行 fetch，报告落后/领先提交数与新提交列表。检查失败返回 200 且带 checkError，不把「查不了」说成「已是最新」",
+					"operationId": "checkUpdate",
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "检查结果（含 checkError 时为检查未成功）",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+					},
+				},
+			},
+			"/api/system/update/apply": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "一键更新源码并重编译",
+					"description": "快进到更新源仓库默认分支的最新提交、重新编译二进制并原子换入（旧二进制留作 .prev 以便回滚）。本机改过源码文件或分支已分叉时拒绝执行并点名；roles/skills/tools/agents/bundles/knowledge_base/data/config.yaml 等运维者内容在合并前暂存、合并后放回，被保留的文件列在 keptContent。请求立即返回 job_id，进度用 GET /api/system/update/job 轮询；已有任务在跑时返回 409",
+					"operationId": "applyUpdate",
+					"requestBody": map[string]interface{}{
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"restart": map[string]interface{}{
+											"type":        "boolean",
+											"description": "更新成功后优雅关闭并退出进程；只在有外部守护时才会被拉起，默认 false",
+										},
+									},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"202": map[string]interface{}{
+							"description": "任务已受理，返回 job_id",
+						},
+						"400": map[string]interface{}{
+							"description": "请求体不合法，或要求重启但本次启动没有装配重启钩子",
+						},
+						"409": map[string]interface{}{
+							"description": "已有一次更新在进行中",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+					},
+				},
+			},
+			"/api/system/update/job": map[string]interface{}{
+				"get": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "查看更新任务进度",
+					"description": "返回正在运行或最近一次更新任务的状态、逐行进度 steps、结果 result 与失败 failure；从未更新过时 job 为 null",
+					"operationId": "getUpdateJob",
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "任务状态",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+					},
+				},
+			},
+			"/api/system/update/rollback": map[string]interface{}{
+				"post": map[string]interface{}{
+					"tags":        []string{"系统更新"},
+					"summary":     "回滚到本次更新之前",
+					"description": "撤到上一次更新记录里的旧提交，并换回换入前保留的旧二进制。自那次更新之后 HEAD 已经变化、或本机有源码改动时返回 409 拒绝，而不是丢弃更新之后的工作",
+					"operationId": "rollbackUpdate",
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "已回滚",
+						},
+						"409": map[string]interface{}{
+							"description": "没有可回滚的记录、更新进行中、或更新之后 HEAD 已被移动",
+						},
+						"401": map[string]interface{}{
+							"description": "未授权",
+						},
+					},
+				},
+			},
 		},
 	}
 
+	addAgentRunSpec(spec)
 	enrichSpecWithI18nKeys(spec)
 	c.JSON(http.StatusOK, spec)
 }

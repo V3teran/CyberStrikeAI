@@ -1244,7 +1244,8 @@ function probeWebshellConnection(conn) {
             encoding: webshellConnEncoding(conn),
             os: webshellConnOS(conn),
             connection_id: conn.id || '',
-            command: buildWebshellProbeCommand(probeToken)
+            command: buildWebshellProbeCommand(probeToken),
+            connection_id: password === '********' ? (document.getElementById('webshell-edit-id')?.value || '') : ''
         })
     })
         .then(function (r) { return r.json(); })
@@ -1399,8 +1400,9 @@ function safeConnIdForStorage(conn) {
 
 function normalizeWebshellPath(path) {
     var p = path == null ? '.' : String(path).trim();
-    if (!p || p === '/') return '.';
-    p = p.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/');
+    if (!p) return '.';
+    p = p.replace(/\\/g, '/').replace(/\/+/g, '/');
+    if (p === '/') return '/';
     // Windows 盘符根目录保持为 "C:/"，避免被裁成 "C:" 后父级计算异常
     if (/^[A-Za-z]:\/?$/.test(p)) {
         return p.slice(0, 2) + '/';
@@ -1428,6 +1430,7 @@ function setWebshellSelectedFile(conn, path) {
 
 function getWebshellParentPath(path) {
     var p = normalizeWebshellPath(path);
+    if (p === '/') return '/';
     // Windows 盘符根目录不可再上探
     if (/^[A-Za-z]:\/$/.test(p)) return p;
     // 允许从当前目录持续上探：. -> .. -> ../.. -> ../../..
@@ -1436,7 +1439,7 @@ function getWebshellParentPath(path) {
     // 已经是相对上探时，先维持链路；后续 list 成功后会用远端真实路径回填
     var idx = p.lastIndexOf('/');
     if (idx < 0) return '.';
-    var parent = p.slice(0, idx) || '.';
+    var parent = p.slice(0, idx) || (p.startsWith('/') ? '/' : '.');
     if (/^[A-Za-z]:$/.test(parent)) return parent + '/';
     return parent;
 }
@@ -2200,6 +2203,9 @@ function formatWebshellEinoUsageSummaryMessage(data) {
     if (Number(d.cachedTokens || 0) > 0) {
         rows.push([wsTOr('chat.einoUsageCachedTokens', '缓存 tokens'), d.cachedTokens]);
     }
+    if (Number(d.cacheWriteTokens || 0) > 0) {
+        rows.push([wsTOr('chat.einoUsageCacheWriteTokens', '缓存写入 tokens'), d.cacheWriteTokens]);
+    }
     if (Number(d.reasoningTokens || 0) > 0) {
         rows.push([wsTOr('chat.einoUsageReasoningTokens', '推理 tokens'), d.reasoningTokens]);
     }
@@ -2240,8 +2246,10 @@ function buildWebshellTimelineItemFromDetail(detail) {
             : { kind: ((data.isError || data.success === false) ? 'error' : 'success'), isError: (data.isError || data.success === false) };
         var wsBackgroundRunning = wsDisplayState.kind === 'background_running';
         var success = !wsDisplayState.isError && !wsBackgroundRunning;
-        var wsIcon = wsBackgroundRunning ? '⏳ ' : (success ? '✅ ' : '❌ ');
-        var wsLabel = wsBackgroundRunning
+        var wsIcon = wsDisplayState.kind === 'blocked' ? '🛡 ' : (wsBackgroundRunning ? '⏳ ' : (success ? '✅ ' : '❌ '));
+        var wsLabel = wsDisplayState.kind === 'blocked'
+            ? ((typeof window.t === 'function') ? window.t('chat.toolExecBlocked', { name: tname }) : tname + ' 已拦截')
+            : wsBackgroundRunning
             ? (((typeof window.getBackgroundRunningToolLabel === 'function') ? window.getBackgroundRunningToolLabel() : '后台执行中') + ': ' + tname)
             : ((typeof window.t === 'function') ? (success ? window.t('chat.toolExecComplete', { name: tname }) : window.t('chat.toolExecFailed', { name: tname })) : (tname + (success ? ' 执行完成' : ' 执行失败')));
         title = ap + wsIcon + wsLabel;
@@ -2286,7 +2294,7 @@ function buildWebshellTimelineItemFromDetail(detail) {
             : { kind: ((data.isError || data.success === false) ? 'error' : 'success'), isError: (data.isError || data.success === false) };
         var execResultLabel = (typeof window.t === 'function') ? window.t('timeline.executionResult') : '执行结果:';
         var execIdLabel = (typeof window.t === 'function') ? window.t('timeline.executionId') : '执行ID:';
-        var sectionClass = displayState.kind === 'background_running' ? 'pending' : (displayState.isError ? 'error' : 'success');
+        var sectionClass = displayState.kind === 'blocked' ? 'blocked' : (displayState.kind === 'background_running' ? 'pending' : (displayState.isError ? 'error' : 'success'));
         html += '<div class="webshell-ai-timeline-msg"><div class="tool-result-section ' + sectionClass + '"><strong>' + escapeHtml(execResultLabel) + '</strong><pre class="tool-result">' + escapeHtml(resultStr) + '</pre>' + (data.executionId ? '<div class="tool-execution-id"><span>' + escapeHtml(execIdLabel) + '</span> <code>' + escapeHtml(String(data.executionId)) + '</code></div>' : '') + '</div></div>';
     } else if (eventType !== 'eino_usage_summary' && detail.message && detail.message !== title) {
         html += '<div class="webshell-ai-timeline-msg">' + escapeHtml(detail.message) + '</div>';
@@ -2557,7 +2565,7 @@ function selectWebshell(id, stateReady) {
         '<svg class="role-selector-arrow" width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
         '</button>' +
         '<div id="ws-role-selection-panel" class="role-selection-panel" style="display:none;">' +
-        '<div class="role-selection-panel-header"><h3 class="role-selection-panel-title">' + (wsT('chatGroup.rolePanelTitle') || '选择角色') + '</h3>' +
+        '<div class="role-selection-panel-header"><h3 class="role-selection-panel-title">' + (wsT('chat.rolePanelTitle') || '选择角色') + '</h3>' +
         '<button type="button" class="role-selection-panel-close" onclick="wsCloseRolePanel()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
         '</div><div id="ws-role-selection-list" class="role-selection-list-main"></div></div>' +
         '</div>' +
@@ -3454,7 +3462,7 @@ function runWebshellAiSend(conn, inputEl, sendBtn, messagesContainer) {
                 : { kind: ((data.isError || data.success === false) ? 'error' : 'success'), isError: (data.isError || data.success === false) };
             var execResultLabel = (typeof window.t === 'function') ? window.t('timeline.executionResult') : '执行结果:';
             var execIdLabel = (typeof window.t === 'function') ? window.t('timeline.executionId') : '执行ID:';
-            var sectionClass = displayState.kind === 'background_running' ? 'pending' : (displayState.isError ? 'error' : 'success');
+            var sectionClass = displayState.kind === 'blocked' ? 'blocked' : (displayState.kind === 'background_running' ? 'pending' : (displayState.isError ? 'error' : 'success'));
             html += '<div class="webshell-ai-timeline-msg"><div class="tool-result-section ' +
                 sectionClass +
                 '"><strong>' + escapeHtml(execResultLabel) + '</strong><pre class="tool-result">' +
@@ -3758,7 +3766,9 @@ function runWebshellAiSend(conn, inputEl, sendBtn, messagesContainer) {
 
                     // ─── Tool result (final) ───
                     } else if (_et === 'tool_result' && _ed) {
-                        var success = _ed.success !== false;
+                        var wsLiveState = typeof window.getToolResultDisplayState === 'function' ? window.getToolResultDisplayState(_ed) : { success: _ed.success !== false };
+                        var blocked = wsLiveState.kind === 'blocked';
+                        var success = wsLiveState.success;
                         var tname = _ed.toolName || '工具';
                         var merged = false;
                         if (_ed.toolCallId) {
@@ -3772,12 +3782,12 @@ function runWebshellAiSend(conn, inputEl, sendBtn, messagesContainer) {
                             }
                         }
                         if (!merged) {
-                            var titleText = wsTOr(success ? 'chat.toolExecComplete' : 'chat.toolExecFailed', '') ||
-                                (tname + (success ? ' 执行完成' : ' 执行失败'));
+                            var titleText = wsTOr(blocked ? 'chat.toolExecBlocked' : (success ? 'chat.toolExecComplete' : 'chat.toolExecFailed'), '') ||
+                                (tname + (blocked ? ' 已拦截' : (success ? ' 执行完成' : ' 执行失败')));
                             if (typeof window.t === 'function') {
-                                try { titleText = window.t(success ? 'chat.toolExecComplete' : 'chat.toolExecFailed', { name: tname }); } catch (e) { /* */ }
+                                try { titleText = window.t(blocked ? 'chat.toolExecBlocked' : (success ? 'chat.toolExecComplete' : 'chat.toolExecFailed'), { name: tname }); } catch (e) { /* */ }
                             }
-                            var title = webshellAgentPx(_ed) + (success ? '✅ ' : '❌ ') + titleText;
+                            var title = webshellAgentPx(_ed) + (blocked ? '🛡 ' : (success ? '✅ ' : '❌ ')) + titleText;
                             var sub = _em || (_ed.result ? String(_ed.result).slice(0, 300) : '');
                             appendTimelineItem('tool_result', title, sub, _ed);
                         }
@@ -4359,7 +4369,7 @@ function parseWebshellListItems(rawOutput) {
                 continue;
             }
             // 仅兜底解析 Unix 权限格式，避免把 `dir` 统计行误识别为文件。
-            if (/^[-dlcbsp]/.test(line)) {
+            if (/^[bcdlps-][rwxStTs-]{9}[+.@]?\s/.test(line)) {
                 var parts = line.trim().split(/\s+/);
                 if (parts.length >= 9) {
                     name = parts.slice(8).join(' ').trim();
@@ -4409,10 +4419,11 @@ function renderFileList(listEl, currentPath, rawOutput, conn, nameFilter) {
     // 面包屑
     var breadcrumbEl = document.getElementById('webshell-file-breadcrumb');
     if (breadcrumbEl) {
-        var parts = (currentPath === '.' || currentPath === '') ? [] : currentPath.replace(/^\//, '').split('/');
-        breadcrumbEl.innerHTML = '<a href="#" class="webshell-breadcrumb-item" data-path=".">' + (wsT('webshell.breadcrumbHome') || '根') + '</a>' +
+        var absolute = currentPath.startsWith('/');
+        var parts = (currentPath === '.' || currentPath === '/' || currentPath === '') ? [] : currentPath.replace(/^\//, '').split('/');
+        breadcrumbEl.innerHTML = '<a href="#" class="webshell-breadcrumb-item" data-path="' + (absolute ? '/' : '.') + '">' + (wsT('webshell.breadcrumbHome') || '根') + '</a>' +
             parts.map(function (p, idx) {
-                var path = parts.slice(0, idx + 1).join('/');
+                var path = (absolute ? '/' : '') + parts.slice(0, idx + 1).join('/');
                 return ' / <a href="#" class="webshell-breadcrumb-item" data-path="' + escapeHtml(path) + '">' + escapeHtml(p) + '</a>';
             }).join('');
     }
@@ -4430,7 +4441,7 @@ function renderFileList(listEl, currentPath, rawOutput, conn, nameFilter) {
     } else {
         html = '<table class="webshell-file-table"><thead><tr><th class="webshell-col-check"><input type="checkbox" id="webshell-file-select-all" title="' + (wsT('webshell.selectAll') || '全选') + '" /></th><th>' + wsT('webshell.filePath') + '</th><th class="webshell-col-size">大小</th><th class="webshell-col-mtime">' + (wsT('webshell.colModifiedAt') || '修改时间') + '</th><th class="webshell-col-owner">' + (wsT('webshell.colOwner') || '所有者') + '</th><th class="webshell-col-perms">' + (wsT('webshell.colPerms') || '权限') + '</th><th class="webshell-col-actions"></th></tr></thead><tbody>';
         if (currentPath !== '.' && currentPath !== '') {
-            html += '<tr><td></td><td><a href="#" class="webshell-file-link" data-path="' + escapeHtml(currentPath.replace(/\/[^/]+$/, '') || '.') + '" data-isdir="1">..</a></td><td></td><td></td><td></td><td></td><td></td></tr>';
+            html += '<tr><td></td><td><a href="#" class="webshell-file-link" data-path="' + escapeHtml(getWebshellParentPath(currentPath)) + '" data-isdir="1">..</a></td><td></td><td></td><td></td><td></td><td></td></tr>';
         }
         items.forEach(function (item) {
             var pathNext = currentPath === '.' ? item.name : currentPath + '/' + item.name;
@@ -4550,8 +4561,9 @@ function renderDirectoryTree(currentPath, items, conn) {
     var expanded = state.expanded;
     var loaded = state.loaded;
     var selectedPath = getWebshellSelectedFile(conn || webshellCurrentConn);
-    if (!tree['.']) tree['.'] = [];
-    if (expanded['.'] !== false) expanded['.'] = true;
+    var rootPath = curr.startsWith('/') ? '/' : '.';
+    if (!tree[rootPath]) tree[rootPath] = [];
+    if (expanded[rootPath] !== false) expanded[rootPath] = true;
 
     // 把当前目录的子项（目录+文件）同步到树缓存
     var childNodes = (items || []).map(function (item) {
@@ -4575,11 +4587,11 @@ function renderDirectoryTree(currentPath, items, conn) {
 
     // 仅对“真实路径”补祖先链；相对上探链（../..）不构建，避免出现假层级。
     var isRelativeUpChain = /^(?:\.\.\/)*\.\.$/.test(curr);
-    var parts = curr === '.' ? [] : curr.split('/');
-    var parentPath = '.';
+    var parts = (curr === '.' || curr === '/') ? [] : curr.replace(/^\//, '').split('/');
+    var parentPath = rootPath;
     if (!isRelativeUpChain) {
         for (var i = 0; i < parts.length; i++) {
-            var nextPath = parentPath === '.' ? parts[i] : parentPath + '/' + parts[i];
+            var nextPath = parentPath === '.' ? parts[i] : normalizeWebshellPath(parentPath + '/' + parts[i]);
             if (!tree[parentPath]) tree[parentPath] = [];
             var parentChildren = tree[parentPath];
             var hasAncestorNode = parentChildren.some(function (n) { return n && n.path === nextPath; });
@@ -4602,13 +4614,13 @@ function renderDirectoryTree(currentPath, items, conn) {
         var isDir = !!node.isDir;
         var children = isDir ? (tree[path] || []).slice() : [];
         var hasLoadedChildren = isDir ? (loaded[path] === true) : true;
-        var canExpand = isDir && (path === '.' || !hasLoadedChildren || children.length > 0);
+        var canExpand = isDir && (path === rootPath || !hasLoadedChildren || children.length > 0);
         var hasChildren = children.length > 0;
         var isExpanded = isDir ? (expanded[path] === true) : false;
         var isActive = path === curr;
         var isSelectedFile = !isDir && path === selectedPath;
         var name = node.name;
-        var icon = isDir ? (path === '.' ? '🗂' : '📁') : '📄';
+        var icon = isDir ? (path === rootPath ? '🗂' : '📁') : '📄';
         var nodeHtml =
             '<div class="webshell-tree-node" data-depth="' + depth + '">' +
             '<div class="webshell-tree-row' + (isActive ? ' active' : '') + (isSelectedFile ? ' selected-file' : '') + '">' +
@@ -4626,7 +4638,7 @@ function renderDirectoryTree(currentPath, items, conn) {
         return nodeHtml;
     }
 
-    treeEl.innerHTML = '<div class="webshell-tree-root">' + renderNode({ path: '.', name: '/', isDir: true }, 0) + '</div>';
+    treeEl.innerHTML = '<div class="webshell-tree-root">' + renderNode({ path: rootPath, name: '/', isDir: true }, 0) + '</div>';
     treeEl.querySelectorAll('.webshell-tree-toggle').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
             e.preventDefault();

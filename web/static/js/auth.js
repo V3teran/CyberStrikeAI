@@ -47,6 +47,7 @@ function clearAuthStorage() {
     authRoles = [];
     authPermissions = new Set();
     authScope = '';
+    applyRBACToUI();
     try {
         localStorage.removeItem(AUTH_STORAGE_KEY);
     } catch (error) {
@@ -91,7 +92,27 @@ function resolveAuthPromises(success) {
     authPromise = null;
 }
 
+function setLoginPasswordVisible(visible) {
+    const input = document.getElementById('login-password');
+    const button = document.getElementById('login-password-toggle');
+    if (input) input.type = visible ? 'text' : 'password';
+    if (button) {
+        button.setAttribute('aria-pressed', String(visible));
+        const key = visible ? 'login.hidePassword' : 'login.showPassword';
+        button.setAttribute('data-i18n', key);
+        const label = typeof window.t === 'function' ? window.t(key) : (visible ? '隐藏密码' : '显示密码');
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+    }
+}
+
+function toggleLoginPasswordVisibility() {
+    const input = document.getElementById('login-password');
+    setLoginPasswordVisible(input && input.type === 'password');
+}
+
 function showLoginOverlay(message = '') {
+    setLoginPasswordVisible(false);
     const overlay = document.getElementById('login-overlay');
     const errorBox = document.getElementById('login-error');
     const usernameInput = document.getElementById('login-username');
@@ -119,6 +140,7 @@ function showLoginOverlay(message = '') {
 }
 
 function hideLoginOverlay() {
+    setLoginPasswordVisible(false);
     const overlay = document.getElementById('login-overlay');
     const errorBox = document.getElementById('login-error');
     const usernameInput = document.getElementById('login-username');
@@ -130,7 +152,9 @@ function hideLoginOverlay() {
     }
     if (passwordInput) {
         passwordInput.value = '';
+        passwordInput.setAttribute('aria-invalid', 'false');
     }
+    if (usernameInput) usernameInput.setAttribute('aria-invalid', 'false');
     if (usernameInput && !authUser) {
         usernameInput.value = '';
     }
@@ -243,6 +267,14 @@ async function apiUploadWithProgress(url, formData, options = {}) {
     });
 }
 
+function clearLoginFormError(event) {
+    const input = event.target;
+    if (!input || (input.id !== 'login-username' && input.id !== 'login-password')) return;
+    input.setAttribute('aria-invalid', 'false');
+    const error = document.getElementById('login-error');
+    if (error) { error.textContent = ''; error.style.display = 'none'; }
+}
+
 async function submitLogin(event) {
     event.preventDefault();
     const usernameInput = document.getElementById('login-username');
@@ -250,13 +282,25 @@ async function submitLogin(event) {
     const errorBox = document.getElementById('login-error');
     const submitBtn = document.querySelector('.login-submit');
 
+    [usernameInput, passwordInput].forEach(input => input && input.setAttribute('aria-invalid', 'false'));
+
     if (!passwordInput) {
         return;
     }
 
     const username = usernameInput ? usernameInput.value.trim() : '';
     const password = passwordInput.value.trim();
+    if (!username || Array.from(username).length > 64) {
+        if (usernameInput) usernameInput.setAttribute('aria-invalid', 'true');
+        if (errorBox) {
+            errorBox.textContent = typeof window.t === 'function' ? window.t('auth.usernameRequired') : '用户名不能为空，且不能超过 64 个字符';
+            errorBox.style.display = 'block';
+        }
+        if (usernameInput) usernameInput.focus();
+        return;
+    }
     if (!password) {
+        passwordInput.setAttribute('aria-invalid', 'true');
         if (errorBox) {
             const msgEmpty = (typeof window !== 'undefined' && typeof window.t === 'function')
                 ? window.t('auth.enterPassword')
@@ -264,6 +308,7 @@ async function submitLogin(event) {
             errorBox.textContent = msgEmpty;
             errorBox.style.display = 'block';
         }
+        passwordInput.focus();
         return;
     }
 
@@ -368,6 +413,7 @@ const PAGE_PERMISSION_MAP = {
     dashboard: 'dashboard:read',
     chat: 'chat:read',
     hitl: 'hitl:read',
+    'tool-guard': 'config:read',
     'info-collect': 'fofa:execute',
     assets: 'asset:read',
     'asset-overview': 'asset:read',
@@ -475,11 +521,18 @@ function applyPermissionElement(el) {
     const allowed = permissionAllowedForElement(el);
     el.hidden = !allowed;
     el.classList.toggle('rbac-permission-denied', !allowed);
+    // Permission decides whether this user may ever use the control; it does not decide
+    // whether the control is ready. A page that disables one for a reason of its own marks
+    // it with data-state-disabled, because writing el.disabled = !allowed here otherwise
+    // re-enables it for exactly the users who are allowed - and a button whose preconditions
+    // are unmet is then pressed, and fails.
+    const blockedByState = el.dataset && el.dataset.stateDisabled === 'true';
+    const disabled = !allowed || blockedByState;
     if ('disabled' in el) {
-        el.disabled = !allowed;
+        el.disabled = disabled;
     }
     el.setAttribute('aria-hidden', allowed ? 'false' : 'true');
-    el.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+    el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
 }
 
 let permissionClickGuardInstalled = false;
@@ -504,6 +557,12 @@ function installPermissionClickGuard() {
 function applyRBACToUI(root) {
     installPermissionClickGuard();
     document.querySelectorAll('[data-page]').forEach((el) => {
+        // Navigation permissions must also be refreshed during scoped renders.
+        // Explicit rules take precedence over the fallback page permission map.
+        if (el.hasAttribute('data-require-permission') || el.hasAttribute('data-require-permission-any')) {
+            applyPermissionElement(el);
+            return;
+        }
         const page = el.getAttribute('data-page');
         const permission = PAGE_PERMISSION_MAP[page];
         if (!permission) return;
@@ -613,10 +672,10 @@ function setUserMenuOpen(open) {
 function getStatusText(status) {
     const s = (status && String(status).toLowerCase()) || '';
     if (typeof window.t !== 'function') {
-        const fallback = { pending: '等待中', queued: '排队中', running: '执行中', background_running: '后台执行中', completed: '已完成', failed: '失败', cancelled: '已终止', hard_timeout: '硬超时', orphaned: '孤儿记录' };
+        const fallback = { pending: '等待中', queued: '排队中', running: '执行中', background_running: '后台执行中', completed: '已完成', failed: '失败', blocked: '已拦截', cancelled: '已终止', hard_timeout: '硬超时', orphaned: '孤儿记录' };
         return fallback[s] || status;
     }
-    const keyMap = { pending: 'mcpDetailModal.statusPending', queued: 'mcpDetailModal.statusQueued', running: 'mcpDetailModal.statusRunning', background_running: 'timeline.backgroundRunning', completed: 'mcpDetailModal.statusCompleted', failed: 'mcpDetailModal.statusFailed', cancelled: 'mcpDetailModal.statusCancelled', hard_timeout: 'mcpMonitor.statusHardTimeout', orphaned: 'mcpMonitor.statusOrphaned' };
+    const keyMap = { pending: 'mcpDetailModal.statusPending', queued: 'mcpDetailModal.statusQueued', running: 'mcpDetailModal.statusRunning', background_running: 'timeline.backgroundRunning', completed: 'mcpDetailModal.statusCompleted', failed: 'mcpDetailModal.statusFailed', blocked: 'mcpMonitor.statusBlocked', cancelled: 'mcpDetailModal.statusCancelled', hard_timeout: 'mcpMonitor.statusHardTimeout', orphaned: 'mcpMonitor.statusOrphaned' };
     const key = keyMap[s];
     return key ? window.t(key) : status;
 }
@@ -667,6 +726,7 @@ function setupLoginUI() {
     const loginForm = document.getElementById('login-form');
     if (loginForm) {
         loginForm.addEventListener('submit', submitLogin);
+        loginForm.addEventListener('input', clearLoginFormError);
     }
 }
 
@@ -943,6 +1003,7 @@ window.generateRobotBindingCode = generateRobotBindingCode;
 window.copyRobotBindingCode = copyRobotBindingCode;
 window.deleteRobotAccountBinding = deleteRobotAccountBinding;
 window.logout = logout;
+window.toggleLoginPasswordVisibility = toggleLoginPasswordVisibility;
 window.hasPermission = hasPermission;
 window.hasAnyPermission = hasAnyPermission;
 window.readApiError = readApiError;

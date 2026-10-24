@@ -18,11 +18,15 @@ import (
 	"cyberstrike-ai/internal/config"
 	"cyberstrike-ai/internal/database"
 	"cyberstrike-ai/internal/knowledge"
+	"cyberstrike-ai/internal/llm"
 	"cyberstrike-ai/internal/mcp"
 	"cyberstrike-ai/internal/mcp/builtin"
 	"cyberstrike-ai/internal/openai"
 	"cyberstrike-ai/internal/security"
+	"cyberstrike-ai/internal/toolguard"
+	"cyberstrike-ai/internal/typesafe"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -93,6 +97,8 @@ type ConfigHandler struct {
 	db                         *database.DB
 	logger                     *zap.Logger
 	mu                         sync.RWMutex
+	toolGuard                  *toolguard.Manager
+	toolGuardRevision          string                  // protected by mu; advanced only after a successful save
 	lastEmbeddingConfig        *config.EmbeddingConfig // 上一次的嵌入模型配置（用于检测变更）
 }
 
@@ -345,13 +351,13 @@ func (h *ConfigHandler) GetConfig(c *gin.Context) {
 		subAgentCount = len(agents.MergeYAMLAndMarkdown(h.config.MultiAgent.SubAgents, load.SubAgents))
 	}
 	multiPub := config.MultiAgentPublic{
-		Enabled:                                    h.config.MultiAgent.Enabled,
-		RobotDefaultAgentMode:                      config.NormalizeRobotAgentMode(h.config.MultiAgent),
-		BatchUseMultiAgent:                         h.config.MultiAgent.BatchUseMultiAgent,
-		SubAgentCount:                              subAgentCount,
-		Orchestration:                              config.NormalizeMultiAgentOrchestration(h.config.MultiAgent.Orchestration),
-		PlanExecuteLoopMaxIterations:               h.config.MultiAgent.PlanExecuteLoopMaxIterations,
-		SummarizationUserIntentLedgerMaxRunes:      h.config.MultiAgent.EinoMiddleware.SummarizationUserIntentLedgerMaxRunesEffective(),
+		Enabled:                               h.config.MultiAgent.Enabled,
+		RobotDefaultAgentMode:                 config.NormalizeRobotAgentMode(h.config.MultiAgent),
+		BatchUseMultiAgent:                    h.config.MultiAgent.BatchUseMultiAgent,
+		SubAgentCount:                         subAgentCount,
+		Orchestration:                         config.NormalizeMultiAgentOrchestration(h.config.MultiAgent.Orchestration),
+		PlanExecuteLoopMaxIterations:          h.config.MultiAgent.PlanExecuteLoopMaxIterations,
+		SummarizationUserIntentLedgerMaxRunes: h.config.MultiAgent.EinoMiddleware.SummarizationUserIntentLedgerMaxRunesEffective(),
 		SummarizationUserIntentLedgerEntryMaxRunes: h.config.MultiAgent.EinoMiddleware.SummarizationUserIntentLedgerEntryMaxRunesEffective(),
 		LatestUserMessageMaxRunes:                  h.config.MultiAgent.EinoMiddleware.LatestUserMessageMaxRunesEffective(),
 		LatestUserMessageHeadRunes:                 h.config.MultiAgent.EinoMiddleware.LatestUserMessageHeadRunesEffective(),
@@ -367,7 +373,7 @@ func (h *ConfigHandler) GetConfig(c *gin.Context) {
 		),
 	}
 
-	c.JSON(http.StatusOK, GetConfigResponse{
+	response, err := maskedConfigResponse(GetConfigResponse{
 		AI:         h.config.AI,
 		OpenAI:     h.config.OpenAI,
 		Vision:     h.config.Vision,
@@ -384,6 +390,11 @@ func (h *ConfigHandler) GetConfig(c *gin.Context) {
 		Robots:     h.config.Robots,
 		MultiAgent: multiPub,
 	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "配置序列化失败"})
+		return
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetToolsResponse 获取工具列表响应（分页）
@@ -727,6 +738,7 @@ type UpdateConfigRequest struct {
 	Robots     *config.RobotsConfig        `json:"robots,omitempty"`
 	MultiAgent *config.MultiAgentAPIUpdate `json:"multi_agent,omitempty"`
 	C2         *config.C2APIUpdate         `json:"c2,omitempty"`
+	Storage    *config.StorageConfig       `json:"storage,omitempty"`
 }
 
 // AgentConfigUpdate 用于 PATCH /api/config 的 agent 段：仅 JSON 中出现的字段（指针非 nil）覆盖内存配置。
@@ -790,6 +802,10 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err := restoreConfigRequestSecrets(&req, h.config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	// 更新OpenAI配置
 	if req.AI != nil {
@@ -887,9 +903,17 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	if req.Hitl != nil {
+		h.config.Hitl.AuditBackend = req.Hitl.EffectiveAuditBackend()
 		h.config.Hitl.AuditModel = req.Hitl.AuditModel
 		h.config.Hitl.ToolWhitelist = mergeHitlToolWhitelistSlice(nil, req.Hitl.ToolWhitelist)
+		if strings.TrimSpace(req.Hitl.DefaultMode) != "" {
+			h.config.Hitl.DefaultMode = req.Hitl.EffectiveDefaultMode()
+		}
 		h.config.Hitl.DefaultReviewer = req.Hitl.EffectiveDefaultReviewer()
+		if req.Hitl.DefaultTimeoutSeconds != nil {
+			v := req.Hitl.EffectiveDefaultTimeoutSeconds()
+			h.config.Hitl.DefaultTimeoutSeconds = &v
+		}
 		h.config.Hitl.AuditAgentPrompt = strings.TrimSpace(req.Hitl.AuditAgentPrompt)
 		h.config.Hitl.AuditAgentPromptReviewEdit = strings.TrimSpace(req.Hitl.AuditAgentPromptReviewEdit)
 		if req.Hitl.RetentionDays != nil {
@@ -900,8 +924,69 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 			h.config.Hitl.RetentionDays = &v
 		}
 		h.logger.Info("更新HITL配置",
+			zap.String("audit_backend", h.config.Hitl.AuditBackend),
 			zap.String("default_reviewer", h.config.Hitl.DefaultReviewer),
 			zap.Int("tool_whitelist", len(h.config.Hitl.ToolWhitelist)),
+		)
+	}
+
+	if req.Storage != nil {
+		st := &h.config.Storage
+		if req.Storage.AutoClean != nil {
+			v := *req.Storage.AutoClean
+			st.AutoClean = &v
+		}
+		if req.Storage.IntervalMinutes != nil {
+			v := *req.Storage.IntervalMinutes
+			if v < 5 {
+				v = 5
+			}
+			st.IntervalMinutes = &v
+		}
+		if req.Storage.OrphanGraceDays != nil {
+			v := *req.Storage.OrphanGraceDays
+			if v < 0 {
+				v = 0
+			}
+			st.OrphanGraceDays = &v
+		}
+		if req.Storage.ActiveGraceHours != nil {
+			v := *req.Storage.ActiveGraceHours
+			if v < 1 {
+				v = 1
+			}
+			st.ActiveGraceHours = &v
+		}
+		if req.Storage.Categories != nil {
+			if st.Categories == nil {
+				st.Categories = make(map[string]config.StorageCategoryConfig, len(req.Storage.Categories))
+			}
+			// 只接受注册表内的类别键，未注册的键直接忽略，避免被写进 config.yaml。
+			for _, key := range config.StorageCategoryOrder {
+				patch, ok := req.Storage.Categories[key]
+				if !ok {
+					continue
+				}
+				cur := st.Categories[key]
+				if patch.Enabled != nil {
+					v := *patch.Enabled
+					cur.Enabled = &v
+				}
+				if patch.RetentionDays != nil {
+					v := *patch.RetentionDays
+					if v < 0 {
+						v = 0
+					}
+					cur.RetentionDays = &v
+				}
+				st.Categories[key] = cur
+			}
+		}
+		h.logger.Info("更新运行空间清理配置",
+			zap.Bool("auto_clean", st.AutoCleanEffective()),
+			zap.Int("interval_minutes", st.IntervalMinutesEffective()),
+			zap.Int("orphan_grace_days", st.OrphanGraceDaysEffective()),
+			zap.Int("active_grace_hours", st.ActiveGraceHoursEffective()),
 		)
 	}
 
@@ -1160,6 +1245,8 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 		}
 	}
 
+	h.config.NormalizeAIProviderProfiles()
+
 	// 保存配置到文件
 	if err := h.saveConfig(); err != nil {
 		h.logger.Error("保存配置失败", zap.Error(err))
@@ -1175,10 +1262,12 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 
 // TestOpenAIRequest 测试OpenAI连接请求
 type TestOpenAIRequest struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
+	CredentialScope string `json:"credential_scope,omitempty"`
+	ChannelID       string `json:"channel_id,omitempty"`
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
 }
 
 // TestOpenAI 测试OpenAI API连接是否可用
@@ -1189,6 +1278,12 @@ func (h *ConfigHandler) TestOpenAI(c *gin.Context) {
 		return
 	}
 
+	resolvedKey, resolveErr := h.resolveProbeSecret(req.APIKey, req.ChannelID, req.BaseURL, req.CredentialScope)
+	if resolveErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resolveErr.Error()})
+		return
+	}
+	req.APIKey = resolvedKey
 	if strings.TrimSpace(req.APIKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API Key 不能为空"})
 		return
@@ -1216,7 +1311,7 @@ func (h *ConfigHandler) TestOpenAI(c *gin.Context) {
 		"max_completion_tokens": 5,
 	}
 
-	// 使用内部 openai Client 进行测试，若 provider 为 claude 会自动走桥接层
+	// OpenAI-compatible 通道使用内部客户端；Claude 通道在下方直接使用 Eino agenticclaude。
 	tmpCfg := &config.OpenAIConfig{
 		Provider: req.Provider,
 		BaseURL:  baseURL,
@@ -1229,6 +1324,28 @@ func (h *ConfigHandler) TestOpenAI(c *gin.Context) {
 	defer cancel()
 
 	start := time.Now()
+	if llm.IsClaudeProvider(req.Provider) {
+		nativeModel, err := llm.NewClaudeAgenticModel(ctx, *tmpCfg, nil, 5, nil)
+		if err == nil {
+			_, err = nativeModel.Generate(ctx, []*schema.AgenticMessage{
+				schema.UserAgenticMessage("Hi"),
+			})
+		}
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"error":   "连接失败: " + err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success":    true,
+			"model":      tmpCfg.Model,
+			"latency_ms": time.Since(start).Milliseconds(),
+		})
+		return
+	}
+
 	var chatResp struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
@@ -1282,11 +1399,76 @@ func (h *ConfigHandler) TestOpenAI(c *gin.Context) {
 	})
 }
 
+// TestTypeSafeRequest 测试 TypeSafe / Jev 连接。
+type TestTypeSafeRequest struct {
+	CredentialScope string `json:"credential_scope,omitempty"`
+	ChannelID       string `json:"channel_id,omitempty"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
+}
+
+// TestTypeSafe 用一条最小 Noul 验证 TypeSafe System One 是否可用。
+func (h *ConfigHandler) TestTypeSafe(c *gin.Context) {
+	var req TestTypeSafeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数: " + err.Error()})
+		return
+	}
+	resolvedKey, resolveErr := h.resolveProbeSecret(req.APIKey, req.ChannelID, req.BaseURL, req.CredentialScope)
+	if resolveErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resolveErr.Error()})
+		return
+	}
+	req.APIKey = resolvedKey
+	if strings.TrimSpace(req.APIKey) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "TypeSafe API Key 不能为空"})
+		return
+	}
+
+	client := typesafe.NewClient(req.BaseURL, req.APIKey, req.Model, nil)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	result, err := client.SystemOne(ctx, "connectivity ping", map[string]typesafe.Question{
+		"ok": typesafe.Noul("Is this a connectivity test ping?", "Yes, this is only a ping.", "No."),
+	})
+	if err != nil {
+		if apiErr, ok := err.(*typesafe.APIError); ok {
+			c.JSON(http.StatusOK, gin.H{
+				"success":     false,
+				"error":       fmt.Sprintf("API 返回错误 (HTTP %d): %s", apiErr.StatusCode, apiErr.Body),
+				"status_code": apiErr.StatusCode,
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"error":   "连接失败: " + err.Error(),
+		})
+		return
+	}
+	model := strings.TrimSpace(req.Model)
+	if result != nil && strings.TrimSpace(result.Model) != "" {
+		model = result.Model
+	}
+	if model == "" {
+		model = config.TypeSafeDefaultModel
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"model":      model,
+		"latency_ms": time.Since(start).Milliseconds(),
+	})
+}
+
 // ListModelsRequest 获取模型列表请求（OpenAI 兼容 GET /models）。
 type ListModelsRequest struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
+	CredentialScope string `json:"credential_scope,omitempty"`
+	ChannelID       string `json:"channel_id,omitempty"`
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
 }
 
 // ListModels 代理调用上游 GET /models，返回可用模型 id 列表。
@@ -1297,6 +1479,12 @@ func (h *ConfigHandler) ListModels(c *gin.Context) {
 		return
 	}
 
+	resolvedKey, resolveErr := h.resolveProbeSecret(req.APIKey, req.ChannelID, req.BaseURL, req.CredentialScope)
+	if resolveErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resolveErr.Error()})
+		return
+	}
+	req.APIKey = resolvedKey
 	provider := strings.TrimSpace(req.Provider)
 	if provider == "" {
 		provider = "openai"
@@ -1358,8 +1546,9 @@ func (h *ConfigHandler) ListModels(c *gin.Context) {
 
 // TestVisionRequest 测试 Vision 模型连接；vision.api_key/base_url 留空时可传 openai 段作回退。
 type TestVisionRequest struct {
-	Vision config.VisionConfig `json:"vision"`
-	OpenAI config.OpenAIConfig `json:"openai,omitempty"`
+	ChannelID string              `json:"channel_id,omitempty"`
+	Vision    config.VisionConfig `json:"vision"`
+	OpenAI    config.OpenAIConfig `json:"openai,omitempty"`
 }
 
 // TestVision 测试视觉模型 API 连接（最小 chat completion）。
@@ -1367,6 +1556,19 @@ func (h *ConfigHandler) TestVision(c *gin.Context) {
 	var req TestVisionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数: " + err.Error()})
+		return
+	}
+	mainKey, mainErr := h.resolveProbeSecret(req.OpenAI.APIKey, req.ChannelID, req.OpenAI.BaseURL, "openai")
+	if mainErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": mainErr.Error()})
+		return
+	}
+	req.OpenAI.APIKey = mainKey
+	h.mu.RLock()
+	restoreErr := restoreConfigRequestSecrets(&req, h.config)
+	h.mu.RUnlock()
+	if restoreErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": restoreErr.Error()})
 		return
 	}
 	oa := req.Vision.OpenAICfgEffective(req.OpenAI)
@@ -1711,8 +1913,33 @@ func (h *ConfigHandler) ApplyConfig(c *gin.Context) {
 	})
 }
 
+// SetUpdateSource 记录一键更新的更新源（单个仓库地址；空 = 回到官方仓库）。
+// 走与其他设置相同的写入路径：备份旧文件、按 YAML 文档只改 update 段、原子落盘。
+func (h *ConfigHandler) SetUpdateSource(repo string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	previous := h.config.Update
+	h.config.Update = config.UpdateConfig{Repo: strings.TrimSpace(repo)}
+	if err := h.saveConfig(); err != nil {
+		h.config.Update = previous
+		return err
+	}
+	return nil
+}
+
+// UpdateSource 读当前配置的更新源地址（加读锁；更新处理器每次请求现读，保存后立即生效）。
+func (h *ConfigHandler) UpdateSource() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.config.Update.Repo
+}
+
 // saveConfig 保存配置到文件
 func (h *ConfigHandler) saveConfig() error {
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+	h.config.NormalizeAIProviderProfiles()
+
 	// 读取现有配置文件并创建备份
 	data, err := os.ReadFile(h.configPath)
 	if err != nil {
@@ -1733,6 +1960,7 @@ func (h *ConfigHandler) saveConfig() error {
 	updateAIConfig(root, h.config.AI)
 	removeKeyFromMap(root.Content[0], "openai")
 	updateVisionConfig(root, h.config.Vision)
+	updateUpdateSourceConfig(root, h.config.Update)
 	updateFOFAConfig(root, h.config.FOFA)
 	updateSpaceSearchConfig(root, "zoomeye", h.config.ZoomEye)
 	updateSpaceSearchConfig(root, "quake", h.config.Quake)
@@ -1741,6 +1969,7 @@ func (h *ConfigHandler) saveConfig() error {
 	updateC2Config(root, h.config.C2)
 	updateRobotsConfig(root, h.config.Robots)
 	updateHitlConfig(root, h.config.Hitl)
+	updateStorageConfig(root, h.config.Storage)
 	updateMultiAgentConfig(root, h.config.MultiAgent)
 	// 更新外部MCP配置（使用external_mcp.go中的函数，同一包中可直接调用）
 	updateExternalMCPConfig(root, h.config.ExternalMCP)
@@ -1857,6 +2086,20 @@ func updateMCPConfig(doc *yaml.Node, cfg config.MCPConfig) {
 	setBoolInMap(mcpNode, "enabled", cfg.Enabled)
 	setStringInMap(mcpNode, "host", cfg.Host)
 	setIntInMap(mcpNode, "port", cfg.Port)
+}
+
+// updateUpdateSourceConfig 写入一键更新的更新源（update 段的单个 repo 字段）。
+// 留空时把整段删掉，而不是留下一个空的 update: 块——"没有配置"应当就是文件里没有这一段，
+// 运行时按官方仓库处理。
+func updateUpdateSourceConfig(doc *yaml.Node, cfg config.UpdateConfig) {
+	root := doc.Content[0]
+	repo := strings.TrimSpace(cfg.Repo)
+	if repo == "" {
+		removeKeyFromMap(root, "update")
+		return
+	}
+	node := ensureMap(root, "update")
+	setStringInMap(node, "repo", repo)
 }
 
 func updateVisionConfig(doc *yaml.Node, cfg config.VisionConfig) {
@@ -2110,6 +2353,7 @@ func (h *ConfigHandler) MergeHitlToolWhitelistIntoConfig(add []string) error {
 func updateHitlConfig(doc *yaml.Node, cfg config.HitlConfig) {
 	root := doc.Content[0]
 	hitlNode := ensureMap(root, "hitl")
+	setStringInMap(hitlNode, "audit_backend", cfg.EffectiveAuditBackend())
 	auditModelNode := ensureMap(hitlNode, "audit_model")
 	setStringInMap(auditModelNode, "provider", cfg.AuditModel.Provider)
 	setStringInMap(auditModelNode, "base_url", cfg.AuditModel.BaseURL)
@@ -2117,10 +2361,51 @@ func updateHitlConfig(doc *yaml.Node, cfg config.HitlConfig) {
 	setStringInMap(auditModelNode, "model", cfg.AuditModel.Model)
 	// flow 样式 [a, b, c] 单行展示，工具多时比块序列省行数
 	setFlowStringSliceInMap(hitlNode, "tool_whitelist", cfg.ToolWhitelist)
+	setStringInMap(hitlNode, "default_mode", cfg.EffectiveDefaultMode())
 	setStringInMap(hitlNode, "default_reviewer", cfg.EffectiveDefaultReviewer())
+	setIntInMap(hitlNode, "default_timeout_seconds", cfg.EffectiveDefaultTimeoutSeconds())
 	setIntInMap(hitlNode, "retention_days", cfg.RetentionDaysEffective())
 	setStringInMap(hitlNode, "audit_agent_prompt", cfg.AuditAgentPrompt)
 	setStringInMap(hitlNode, "audit_agent_prompt_review_edit", cfg.AuditAgentPromptReviewEdit)
+}
+
+// updateStorageConfig 把运行空间清理策略写回 config.yaml，保留文件其余内容与注释。
+func updateStorageConfig(doc *yaml.Node, cfg config.StorageConfig) {
+	root := doc.Content[0]
+	storageNode := ensureMap(root, "storage")
+	setBoolInMap(storageNode, "auto_clean", cfg.AutoCleanEffective())
+	setIntInMap(storageNode, "interval_minutes", cfg.IntervalMinutesEffective())
+	setIntInMap(storageNode, "orphan_grace_days", cfg.OrphanGraceDaysEffective())
+	setIntInMap(storageNode, "active_grace_hours", cfg.ActiveGraceHoursEffective())
+
+	// 按固定顺序输出，避免每次保存都因 map 迭代顺序不同而重排整个文件。
+	categoriesNode := ensureMap(storageNode, "categories")
+	for _, key := range config.StorageCategoryOrder {
+		categoryNode := ensureMap(categoriesNode, key)
+		setBoolInMap(categoryNode, "enabled", cfg.CategoryEnabled(key))
+		setIntInMap(categoryNode, "retention_days", cfg.CategoryRetentionDays(key))
+	}
+}
+
+// UpdateHitlDefaultConfig 更新全局默认人机协同配置并写入 config.yaml。
+func (h *ConfigHandler) UpdateHitlDefaultConfig(mode, reviewer string, timeoutSeconds int) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.config.Hitl.DefaultMode = config.HitlConfig{DefaultMode: mode}.EffectiveDefaultMode()
+	h.config.Hitl.DefaultReviewer = config.HitlConfig{DefaultReviewer: reviewer}.EffectiveDefaultReviewer()
+	if timeoutSeconds < 0 {
+		timeoutSeconds = 0
+	}
+	h.config.Hitl.DefaultTimeoutSeconds = &timeoutSeconds
+	if err := h.saveConfig(); err != nil {
+		return err
+	}
+	h.logger.Info("HITL 全局默认配置已写入配置文件",
+		zap.String("default_mode", h.config.Hitl.DefaultMode),
+		zap.String("default_reviewer", h.config.Hitl.DefaultReviewer),
+		zap.Int("default_timeout_seconds", timeoutSeconds),
+	)
+	return nil
 }
 
 // UpdateHitlDefaultReviewer 更新全局默认审批方并写入 config.yaml。

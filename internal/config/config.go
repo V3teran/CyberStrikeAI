@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"cyberstrike-ai/internal/termout"
+	"cyberstrike-ai/internal/toolguard"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,11 +33,13 @@ type Config struct {
 	Shodan      SpaceSearchConfig     `yaml:"shodan,omitempty" json:"shodan,omitempty"`
 	Agent       AgentConfig           `yaml:"agent"`
 	Hitl        HitlConfig            `yaml:"hitl,omitempty" json:"hitl,omitempty"`
+	ToolGuard   *toolguard.Config     `yaml:"tool_guard,omitempty" json:"tool_guard,omitempty"`
 	Security    SecurityConfig        `yaml:"security"`
 	Database    DatabaseConfig        `yaml:"database"`
 	Auth        AuthConfig            `yaml:"auth"`
 	Audit       AuditConfig           `yaml:"audit,omitempty" json:"audit,omitempty"`
 	Monitor     MonitorConfig         `yaml:"monitor,omitempty" json:"monitor,omitempty"`
+	Storage     StorageConfig         `yaml:"storage,omitempty" json:"storage,omitempty"`
 	ExternalMCP ExternalMCPConfig     `yaml:"external_mcp,omitempty"`
 	Knowledge   KnowledgeConfig       `yaml:"knowledge,omitempty"`
 	C2          C2Config              `yaml:"c2,omitempty" json:"c2,omitempty"`                 // 内置 C2 总开关；未配置时默认启用
@@ -45,6 +51,14 @@ type Config struct {
 	MultiAgent  MultiAgentConfig      `yaml:"multi_agent,omitempty" json:"multi_agent,omitempty"`
 	Project     ProjectConfig         `yaml:"project,omitempty" json:"project,omitempty"`
 	Vision      VisionConfig          `yaml:"vision,omitempty" json:"vision,omitempty"`
+	Update      UpdateConfig          `yaml:"update,omitempty" json:"update,omitempty"`
+}
+
+// UpdateConfig 一键更新的更新源（可选）：一个仓库地址，更新跟随该仓库的默认分支。
+// 留空即官方仓库（internal/update.DefaultRepoURL），跟随镜像或自己的二开只需改这一处。
+type UpdateConfig struct {
+	// Repo 更新源仓库地址（https/http/ssh/git/file:// 或本机绝对路径）；留空 = 官方仓库。
+	Repo string `yaml:"repo,omitempty" json:"repo,omitempty"`
 }
 
 type EnsureLocalConfigResult struct {
@@ -59,17 +73,23 @@ const (
 	DefaultLatestUserMessageMaxRunes                  = 48000
 	DefaultLatestUserMessageHeadRunes                 = 24000
 	DefaultLatestUserMessageTailRunes                 = 24000
-	DefaultSummarizationOutputReserveTokens           = 8192
+	DefaultSummarizationOutputReserveTokens           = 40960
 )
 
 // ProjectConfig 项目黑板（跨对话共享事实）配置。
 type ProjectConfig struct {
+	ContextCheckpoints      *bool  `yaml:"context_checkpoints,omitempty" json:"context_checkpoints,omitempty"`
 	Enabled                 bool   `yaml:"enabled" json:"enabled"`
 	DefaultProjectID        string `yaml:"default_project_id,omitempty" json:"default_project_id,omitempty"` // 机器人/批量等无显式项目时绑定的默认项目
 	FactIndexMaxRunes       int    `yaml:"fact_index_max_runes,omitempty" json:"fact_index_max_runes,omitempty"`
 	FactIndexPathMaxRunes   int    `yaml:"fact_index_path_max_runes,omitempty" json:"fact_index_path_max_runes,omitempty"`
 	FactSummaryMaxRunes     int    `yaml:"fact_summary_max_runes,omitempty" json:"fact_summary_max_runes,omitempty"`
 	DefaultInjectDeprecated bool   `yaml:"default_inject_deprecated,omitempty" json:"default_inject_deprecated,omitempty"`
+}
+
+// ContextCheckpointsEnabled persists generated continuation notes on compaction.
+func (c ProjectConfig) ContextCheckpointsEnabled() bool {
+	return c.ContextCheckpoints == nil || *c.ContextCheckpoints
 }
 
 // FactIndexMaxRunesEffective 自动注入黑板索引的最大 rune 数。
@@ -274,7 +294,7 @@ type MultiAgentEinoMiddlewareConfig struct {
 	ReductionSubAgents         bool     `yaml:"reduction_sub_agents,omitempty" json:"reduction_sub_agents,omitempty"` // also attach to sub-agents
 	// SummarizationTriggerRatio controls summarization trigger threshold as max_total_tokens * ratio (default 0.8).
 	SummarizationTriggerRatio float64 `yaml:"summarization_trigger_ratio,omitempty" json:"summarization_trigger_ratio,omitempty"`
-	// SummarizationOutputReserveTokens reserves completion headroom for the summarization model call (default 8192).
+	// SummarizationOutputReserveTokens reserves completion headroom for the summarization model call (default 40960).
 	SummarizationOutputReserveTokens int `yaml:"summarization_output_reserve_tokens,omitempty" json:"summarization_output_reserve_tokens,omitempty"`
 	// SummarizationEmitInternalEvents controls middleware internal event emission (default true).
 	SummarizationEmitInternalEvents *bool `yaml:"summarization_emit_internal_events,omitempty" json:"summarization_emit_internal_events,omitempty"`
@@ -298,7 +318,8 @@ type MultiAgentEinoMiddlewareConfig struct {
 	PlanExecuteMaxStepResultRunes int `yaml:"plan_execute_max_step_result_runes,omitempty" json:"plan_execute_max_step_result_runes,omitempty"`
 	// PlanExecuteKeepLastSteps keeps only the tail steps in prompt view (default 8).
 	PlanExecuteKeepLastSteps int `yaml:"plan_execute_keep_last_steps,omitempty" json:"plan_execute_keep_last_steps,omitempty"`
-	// CheckpointDir when non-empty enables adk.Runner CheckPointStore (file-backed) for interrupt/resume persistence.
+	// CheckpointDir is retained for config compatibility. Chat agent runs do
+	// not consume it; cross-turn recovery is centralized in conversations.last_react_*.
 	CheckpointDir string `yaml:"checkpoint_dir,omitempty" json:"checkpoint_dir,omitempty"`
 	// DeepOutputKey passed to deep.Config OutputKey (session final text); empty = off.
 	DeepOutputKey string `yaml:"deep_output_key,omitempty" json:"deep_output_key,omitempty"`
@@ -803,8 +824,11 @@ type ServerConfig struct {
 }
 
 type LogConfig struct {
-	Level  string `yaml:"level"`
-	Output string `yaml:"output"`
+	Level                   string `yaml:"level"`
+	Output                  string `yaml:"output"`
+	DiagnosticDir           string `yaml:"diagnostic_dir"`
+	DiagnosticDisabled      bool   `yaml:"diagnostic_disabled"`
+	DiagnosticRetentionDays int    `yaml:"diagnostic_retention_days"`
 }
 
 type MCPConfig struct {
@@ -817,7 +841,7 @@ type MCPConfig struct {
 }
 
 type OpenAIConfig struct {
-	Provider            string `yaml:"provider,omitempty" json:"provider,omitempty"` // API 提供商: "openai"(默认) 或 "claude"，claude 时自动桥接为 Anthropic Messages API
+	Provider            string `yaml:"provider,omitempty" json:"provider,omitempty"` // API 提供商: "openai"(默认) 或 "claude"，claude 使用 Eino 原生 Anthropic Messages API
 	APIKey              string `yaml:"api_key" json:"api_key"`
 	BaseURL             string `yaml:"base_url" json:"base_url"`
 	Model               string `yaml:"model" json:"model"`
@@ -945,10 +969,12 @@ func (c *Config) ApplyDefaultAIChannel() {
 	if c == nil {
 		return
 	}
+	c.NormalizeAIProviderProfiles()
 	c.AI.EnsureDefaultFromOpenAI(c.OpenAI)
 	if oa, _, ok := c.AI.ResolveChannel(c.AI.DefaultChannel); ok {
 		c.OpenAI = oa
 	}
+	c.NormalizeAIProviderProfiles()
 }
 
 func (c OpenAIConfig) MaxCompletionTokensEffective() int {
@@ -959,28 +985,71 @@ func (c OpenAIConfig) MaxCompletionTokensEffective() int {
 }
 
 // IsDeepSeekEndpointOrModel reports whether the channel targets DeepSeek's
-// official-compatible API or a DeepSeek model family. This is separate from the
-// reasoning profile: profile controls field mapping, while DeepSeek has provider
-// constraints such as default thinking mode and no tool_choice in thinking mode.
+// official-compatible API endpoint. The historical name is kept for compatibility;
+// model names alone are not enough to infer DeepSeek wire behavior behind
+// OpenAI-compatible gateways.
 func (c OpenAIConfig) IsDeepSeekEndpointOrModel() bool {
 	baseURL := strings.ToLower(strings.TrimSpace(c.BaseURL))
-	model := strings.ToLower(strings.TrimSpace(c.Model))
-	return strings.Contains(baseURL, "deepseek") || strings.Contains(model, "deepseek")
+	return strings.Contains(baseURL, "deepseek")
+}
+
+func (c OpenAIConfig) IsDeepSeekOfficialEndpoint() bool {
+	host := normalizedURLHost(c.BaseURL)
+	return host == "api.deepseek.com"
+}
+
+func normalizedURLHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		parsed, err = url.Parse("https://" + strings.TrimLeft(raw, "/"))
+		if err != nil {
+			return ""
+		}
+	}
+	return strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
+}
+
+func NormalizeOpenAIProviderProfile(oa *OpenAIConfig) {
+	if oa == nil {
+		return
+	}
+	if oa.IsDeepSeekOfficialEndpoint() {
+		oa.Reasoning.Profile = "deepseek"
+	}
+}
+
+func (c *Config) NormalizeAIProviderProfiles() {
+	if c == nil {
+		return
+	}
+	NormalizeOpenAIProviderProfile(&c.OpenAI)
+	if c.AI.Channels != nil {
+		for id, ch := range c.AI.Channels {
+			oa := ch.ToOpenAIConfig()
+			NormalizeOpenAIProviderProfile(&oa)
+			ch.Reasoning = oa.Reasoning
+			c.AI.Channels[id] = ch
+		}
+	}
 }
 
 // OpenAIReasoningConfig 全局默认与网关 profile（对话页可通过 ChatRequest.reasoning 覆盖，受 AllowClientReasoning 约束）。
 type OpenAIReasoningConfig struct {
 	// Mode: auto（默认）| on | off | default（与 auto 相同）。
-	// off 在 OpenAI/Claude profile 下省略推理字段；DeepSeek profile 下发送 thinking.type=disabled（其默认开启思考）。
+	// off 对已知支持 none 的官方 OpenAI 模型发送 reasoning_effort=none；DeepSeek profile 发送 thinking.type=disabled；其他服务保持省略推理字段。
 	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
-	// Effort: low | medium | high | max | xhigh；max/xhigh 为不同网关最高档命名，原样下发、不互转。空表示不单独指定强度。
+	// Effort: low | medium | high | max | xhigh；已知支持 none 的官方 OpenAI 模型另接受 none（等同关闭）。空表示不单独指定强度。
 	Effort string `yaml:"effort,omitempty" json:"effort,omitempty"`
 	// AllowClientReasoning 为 false 时忽略请求体 reasoning；nil 或未设置等同于 true。
 	AllowClientReasoning *bool `yaml:"allow_client_reasoning,omitempty" json:"allow_client_reasoning,omitempty"`
 	// Profile: auto | deepseek_compat | openai_compat | output_config_effort
 	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
 	// ExtraRequestFields 合并进 Chat Completions 根 JSON（管理员用；与自动字段同名时后者覆盖）。
-	// Mode=off 时会移除其中的推理控制字段，但保留其他扩展字段；DeepSeek profile 随后补充显式关闭开关。
+	// Mode=off 时移除其中的推理控制字段，保留其他扩展字段，再按提供商与已知模型能力补充显式关闭参数。
 	ExtraRequestFields map[string]interface{} `yaml:"extra_request_fields,omitempty" json:"extra_request_fields,omitempty"`
 }
 
@@ -1021,7 +1090,17 @@ type SpaceSearchConfig struct {
 	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
 }
 
+type ProcessIsolationConfig struct {
+	Mode           string `yaml:"mode" json:"mode"`
+	CgroupRoot     string `yaml:"cgroup_root" json:"cgroup_root"`
+	MaxProcesses   int    `yaml:"max_processes" json:"max_processes"`
+	MemoryMaxBytes int64  `yaml:"memory_max_bytes" json:"memory_max_bytes"`
+	CPUQuotaMicros int64  `yaml:"cpu_quota_micros" json:"cpu_quota_micros"`
+}
+
 type SecurityConfig struct {
+	ProcessIsolation ProcessIsolationConfig `yaml:"process_isolation,omitempty" json:"process_isolation"`
+
 	Tools               []ToolConfig `yaml:"tools,omitempty"`                 // 向后兼容：支持在主配置文件中定义工具
 	ToolsDir            string       `yaml:"tools_dir,omitempty"`             // 工具配置文件目录（新方式）
 	ToolDescriptionMode string       `yaml:"tool_description_mode,omitempty"` // 工具描述模式: "short" | "full"，默认 short
@@ -1052,7 +1131,9 @@ type AgentConfig struct {
 // tool_whitelist 可在侧栏「应用」时合并写入 config.yaml 并立即生效。
 // audit_agent_prompt / audit_agent_prompt_review_edit 可在人机协同页编辑并立即生效；空则使用内置默认。
 type HitlConfig struct {
-	// AuditModel 审计 Agent 专用模型；字段留空时继承 OpenAI 主配置，便于用小模型做审批。
+	// AuditBackend 审计 Agent 后端：openai（兼容协议聊天模型）或 typesafe（Jev 结构化裁决）。空值视为 openai。
+	AuditBackend string `yaml:"audit_backend,omitempty" json:"audit_backend,omitempty"`
+	// AuditModel 审计 Agent 专用模型。openai 后端空字段继承主模型；typesafe 后端 api_key 必填，不继承主模型密钥。
 	AuditModel OpenAIConfig `yaml:"audit_model,omitempty" json:"audit_model,omitempty"`
 	// ToolWhitelist 全局免审批工具名（与白名单内工具不触发 HITL 审批）。
 	ToolWhitelist []string `yaml:"tool_whitelist,omitempty" json:"tool_whitelist,omitempty"`
@@ -1062,8 +1143,24 @@ type HitlConfig struct {
 	AuditAgentPromptReviewEdit string `yaml:"audit_agent_prompt_review_edit,omitempty" json:"audit_agent_prompt_review_edit,omitempty"`
 	// RetentionDays 已决策审计日志（hitl_interrupts 非 pending）保留天数；省略时默认 90；0 表示不自动清理。
 	RetentionDays *int `yaml:"retention_days,omitempty" json:"retention_days,omitempty"`
-	// DefaultReviewer 全局默认审批方（human | audit_agent）；未选会话时切换会写入 config.yaml；新建会话无独立配置时沿用。
+	// DefaultMode 全局默认人机协同模式（off | approval | review_edit）；新建会话无独立配置时沿用。
+	DefaultMode string `yaml:"default_mode,omitempty" json:"default_mode,omitempty"`
+	// DefaultReviewer 全局默认审批方（human | audit_agent）；新建会话无独立配置时沿用。
 	DefaultReviewer string `yaml:"default_reviewer,omitempty" json:"default_reviewer,omitempty"`
+	// DefaultTimeoutSeconds 全局默认审批等待秒数；nil 表示使用前端历史默认 300 秒，0 表示不限时。
+	DefaultTimeoutSeconds *int `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty"`
+}
+
+// EffectiveDefaultMode returns off, approval, or review_edit; omitted or unknown values default to off.
+func (h HitlConfig) EffectiveDefaultMode() string {
+	switch strings.ToLower(strings.TrimSpace(h.DefaultMode)) {
+	case "feedback", "followup":
+		return "approval"
+	case "approval", "review_edit":
+		return strings.ToLower(strings.TrimSpace(h.DefaultMode))
+	default:
+		return "off"
+	}
 }
 
 // EffectiveDefaultReviewer returns human or audit_agent; omitted or unknown values default to human.
@@ -1076,6 +1173,17 @@ func (h HitlConfig) EffectiveDefaultReviewer() string {
 	}
 }
 
+// EffectiveDefaultTimeoutSeconds returns the default HITL approval timeout; nil defaults to 5 minutes.
+func (h HitlConfig) EffectiveDefaultTimeoutSeconds() int {
+	if h.DefaultTimeoutSeconds == nil {
+		return 300
+	}
+	if *h.DefaultTimeoutSeconds < 0 {
+		return 0
+	}
+	return *h.DefaultTimeoutSeconds
+}
+
 // RetentionDaysEffective returns retention; 0 means keep forever; omitted defaults to 90.
 func (h HitlConfig) RetentionDaysEffective() int {
 	if h.RetentionDays == nil {
@@ -1085,6 +1193,37 @@ func (h HitlConfig) RetentionDaysEffective() int {
 		return 0
 	}
 	return *h.RetentionDays
+}
+
+const (
+	HitlAuditBackendOpenAI   = "openai"
+	HitlAuditBackendTypeSafe = "typesafe"
+	TypeSafeDefaultBaseURL   = "https://api.typesafe.ai"
+	TypeSafeDefaultModel     = "jev-latest"
+)
+
+// EffectiveAuditBackend returns openai or typesafe. Omitted or unknown values default to openai.
+func (h HitlConfig) EffectiveAuditBackend() string {
+	switch strings.ToLower(strings.TrimSpace(h.AuditBackend)) {
+	case HitlAuditBackendTypeSafe, "jev", "type-safe", "typesafe-ai":
+		return HitlAuditBackendTypeSafe
+	default:
+		return HitlAuditBackendOpenAI
+	}
+}
+
+// TypeSafeConfigEffective returns TypeSafe endpoint settings. Empty base_url/model use defaults; API key is never inherited from the main OpenAI channel.
+func (h HitlConfig) TypeSafeConfigEffective() (baseURL, apiKey, model string) {
+	baseURL = strings.TrimSpace(h.AuditModel.BaseURL)
+	if baseURL == "" {
+		baseURL = TypeSafeDefaultBaseURL
+	}
+	apiKey = strings.TrimSpace(h.AuditModel.APIKey)
+	model = strings.TrimSpace(h.AuditModel.Model)
+	if model == "" {
+		model = TypeSafeDefaultModel
+	}
+	return strings.TrimSuffix(baseURL, "/"), apiKey, model
 }
 
 // AuditModelEffective returns the audit-agent model config with empty fields inherited from the main model config.
@@ -1202,6 +1341,22 @@ func (c HitlConfig) EffectiveAuditAgentPromptForMode(mode string) string {
 	return DefaultHitlAuditAgentPrompt()
 }
 
+// JevOperatorPolicy returns a custom audit-strategy prompt for TypeSafe Jev.
+// Built-in default prompts stay encoded as Jev questions and are not copied into state.
+func (c HitlConfig) JevOperatorPolicy(mode string) string {
+	effective := strings.TrimSpace(c.EffectiveAuditAgentPromptForMode(mode))
+	var def string
+	if normalizeHitlModeForPrompt(mode) == "review_edit" {
+		def = strings.TrimSpace(DefaultHitlAuditAgentPromptReviewEdit())
+	} else {
+		def = strings.TrimSpace(DefaultHitlAuditAgentPrompt())
+	}
+	if effective == "" || effective == def {
+		return ""
+	}
+	return effective
+}
+
 func normalizeHitlModeForPrompt(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "review_edit":
@@ -1230,6 +1385,132 @@ func (m MonitorConfig) RetentionDaysEffective() int {
 		return 0
 	}
 	return *m.RetentionDays
+}
+
+// 运行空间垃圾清理的类别键。顺序即前端展示顺序，勿依赖 map 迭代顺序。
+const (
+	StorageCategoryWorkspace            = "workspace"
+	StorageCategoryReduction            = "reduction"
+	StorageCategoryConversationArtifact = "conversation_artifacts"
+	StorageCategoryPlantask             = "plantask"
+	StorageCategoryC2Artifacts          = "c2_artifacts"
+	StorageCategoryChatUploads          = "chat_uploads"
+	StorageCategoryWorkflowCheckpoints  = "workflow_checkpoints"
+	StorageCategoryDiagnosticLogs       = "diagnostic_logs"
+)
+
+// StorageCategoryOrder 列出全部可清理类别，供 UI 与报表稳定排序。
+var StorageCategoryOrder = []string{
+	StorageCategoryWorkspace,
+	StorageCategoryReduction,
+	StorageCategoryConversationArtifact,
+	StorageCategoryPlantask,
+	StorageCategoryC2Artifacts,
+	StorageCategoryChatUploads,
+	StorageCategoryWorkflowCheckpoints,
+	StorageCategoryDiagnosticLogs,
+}
+
+// StorageCategoryDefaults 各类别默认保留天数。取较短值的是纯派生产物
+// （reduction/checkpoint），取较长值的是可能仍需人工回看的上传件。
+var StorageCategoryDefaults = map[string]int{
+	StorageCategoryWorkspace:            30,
+	StorageCategoryReduction:            7,
+	StorageCategoryConversationArtifact: 30,
+	StorageCategoryPlantask:             30,
+	StorageCategoryC2Artifacts:          30,
+	StorageCategoryChatUploads:          90,
+	StorageCategoryWorkflowCheckpoints:  7,
+	StorageCategoryDiagnosticLogs:       14,
+}
+
+// StorageCategoryConfig 单个清理类别的策略覆盖。
+type StorageCategoryConfig struct {
+	// Enabled 省略时默认 true；显式 false 表示该类别既不自动清理也不出现在手动清理范围内。
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// RetentionDays 省略时使用 StorageCategoryDefaults；0 表示不按保留期清理（孤儿目录仍会回收）。
+	RetentionDays *int `yaml:"retention_days,omitempty" json:"retention_days,omitempty"`
+}
+
+// StorageConfig 运行空间垃圾清理策略。
+// 自动清理默认关闭：与 Argo ttlStrategy / K8s ttlSecondsAfterFinished 的 unset 语义一致，
+// 升级后不会在管理员不知情的情况下删除既有数据。
+type StorageConfig struct {
+	// AutoClean 省略或 false 关闭后台自动清理；显式 true 才启用。
+	AutoClean *bool `yaml:"auto_clean,omitempty" json:"auto_clean,omitempty"`
+	// IntervalMinutes 后台清理轮询间隔；省略默认 60，最小 5。
+	IntervalMinutes *int `yaml:"interval_minutes,omitempty" json:"interval_minutes,omitempty"`
+	// OrphanGraceDays 会话/项目已删除但目录残留时的最小保留天数；省略默认 1。
+	OrphanGraceDays *int `yaml:"orphan_grace_days,omitempty" json:"orphan_grace_days,omitempty"`
+	// ActiveGraceHours 最近有活动的会话一律跳过清理；省略默认 24。
+	ActiveGraceHours *int `yaml:"active_grace_hours,omitempty" json:"active_grace_hours,omitempty"`
+	// Categories 按类别覆盖策略；未列出的类别使用内置默认值。
+	Categories map[string]StorageCategoryConfig `yaml:"categories,omitempty" json:"categories,omitempty"`
+}
+
+// AutoCleanEffective returns true only when storage.auto_clean is explicitly true.
+func (s StorageConfig) AutoCleanEffective() bool {
+	return s.AutoClean != nil && *s.AutoClean
+}
+
+// IntervalMinutesEffective returns the background sweep interval; defaults to 60, floor 5.
+func (s StorageConfig) IntervalMinutesEffective() int {
+	if s.IntervalMinutes == nil {
+		return 60
+	}
+	if *s.IntervalMinutes < 5 {
+		return 5
+	}
+	return *s.IntervalMinutes
+}
+
+// OrphanGraceDaysEffective returns the minimum age before an orphaned session dir is reclaimed; defaults to 1.
+func (s StorageConfig) OrphanGraceDaysEffective() int {
+	if s.OrphanGraceDays == nil {
+		return 1
+	}
+	if *s.OrphanGraceDays < 0 {
+		return 0
+	}
+	return *s.OrphanGraceDays
+}
+
+// ActiveGraceHoursEffective returns the recent-activity protection window; defaults to 24, floor 1.
+func (s StorageConfig) ActiveGraceHoursEffective() int {
+	if s.ActiveGraceHours == nil {
+		return 24
+	}
+	if *s.ActiveGraceHours < 1 {
+		return 1
+	}
+	return *s.ActiveGraceHours
+}
+
+// CategoryEnabled reports whether a category participates in cleanup; unknown keys default to false.
+func (s StorageConfig) CategoryEnabled(key string) bool {
+	if _, known := StorageCategoryDefaults[key]; !known {
+		return false
+	}
+	if c, ok := s.Categories[key]; ok && c.Enabled != nil {
+		return *c.Enabled
+	}
+	return true
+}
+
+// CategoryRetentionDays returns the effective retention for a category; unknown keys yield 0 (keep forever).
+func (s StorageConfig) CategoryRetentionDays(key string) int {
+	def, known := StorageCategoryDefaults[key]
+	if !known {
+		return 0
+	}
+	c, ok := s.Categories[key]
+	if !ok || c.RetentionDays == nil {
+		return def
+	}
+	if *c.RetentionDays < 0 {
+		return 0
+	}
+	return *c.RetentionDays
 }
 
 // AuditConfig platform operation audit log settings (not chat/tool execution bodies).
@@ -1365,6 +1646,14 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)
 	}
+	if cfg.ToolGuard != nil {
+		if err := validateToolGuardYAML(data); err != nil {
+			return nil, fmt.Errorf("调用拦截配置无效: %w", err)
+		}
+	}
+	if _, err := toolguard.Compile(cfg.EffectiveToolGuard()); err != nil {
+		return nil, fmt.Errorf("调用拦截配置无效: %w", err)
+	}
 
 	if cfg.Auth.SessionDurationHours <= 0 {
 		cfg.Auth.SessionDurationHours = 12
@@ -1372,6 +1661,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Audit.MaxDetailBytes <= 0 {
 		cfg.Audit.MaxDetailBytes = 8192
 	}
+	cfg.NormalizeAIProviderProfiles()
 	cfg.ApplyDefaultAIChannel()
 	if err := validateOpenAIOutputLimits(cfg.OpenAI); err != nil {
 		return nil, err
@@ -1443,6 +1733,227 @@ func validateOpenAIOutputLimits(openAI OpenAIConfig) error {
 		return fmt.Errorf("openai.max_completion_tokens 必须为正数")
 	}
 	return nil
+}
+
+// LoadUpdateRepo 只读 update 段的 repo 字段，不加载也不校验文件其余部分：命令行一键更新
+// 必须与页面用同一个更新源，而配置里其它段落坏掉不该拦住"把源码更新好"这条修复路径。
+// 文件不存在不是错误（未配置 = 官方仓库）；YAML 解析失败则报错，不去猜更新源。
+func LoadUpdateRepo(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("读取配置文件失败: %w", err)
+	}
+	var thin struct {
+		Update struct {
+			Repo string `yaml:"repo"`
+		} `yaml:"update"`
+	}
+	if err := yaml.Unmarshal(data, &thin); err != nil {
+		return "", fmt.Errorf("解析配置文件失败: %w", err)
+	}
+	return strings.TrimSpace(thin.Update.Repo), nil
+}
+
+// FileVersion 读一个配置文件形态 YAML 的顶层 version 字段。仓库里的 config.example.yaml
+// 载着这份代码对应的发布版本（上游随 release 提交一起改），一键更新用它把"当前跑的是什么
+// 版本"同步进运维者的 config.yaml。文件或字段不存在 = 未知，不是错误。
+func FileVersion(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("读取配置文件失败: %w", err)
+	}
+	version, err := parseTopVersion(data)
+	if err != nil {
+		return "", fmt.Errorf("解析配置文件失败: %w", err)
+	}
+	return version, nil
+}
+
+// parseTopVersion 从配置文本里取顶层 version。走 YAML 解析，version / "version" / 'version'
+// 三种写法一视同仁——读取认得的写法，写入也必须认得，否则就会在合法的引号键配置上追加出
+// 第二个 version 键（见 WriteVersion）。
+func parseTopVersion(data []byte) (string, error) {
+	var thin struct {
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(data, &thin); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(thin.Version), nil
+}
+
+// versionValuePattern 约束能写进配置的版本号：它来自仓库里的文件，但落到的是运维者的
+// 配置上，带引号或换行的值会把 YAML 写坏。
+var versionValuePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+
+// topVersionKey 判断一行是不是顶层的 version 键，三种 YAML 都认的写法都在内：version:、
+// "version":、'version':。缩进的同名键属于别的段落，不动。
+func topVersionKey(line string) bool {
+	for _, key := range []string{"version", `"version"`, "'version'"} {
+		if strings.HasPrefix(line, key) {
+			return strings.HasPrefix(strings.TrimSpace(line[len(key):]), ":")
+		}
+	}
+	return false
+}
+
+func yamlDocumentStart(line string) bool {
+	line = strings.TrimPrefix(strings.TrimSuffix(line, "\r"), "\uFEFF")
+	if !strings.HasPrefix(line, "---") {
+		return false
+	}
+	rest := line[len("---"):]
+	if strings.Trim(rest, " \t") == "" {
+		return true
+	}
+	return len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t') && strings.HasPrefix(strings.TrimLeft(rest, " \t"), "#")
+}
+
+// WriteVersion 就地替换配置文件的顶层 version 字段，保留其它每一行的原样（tarball 升级
+// 路径一直这么做）；没有这个字段就插到文件开头（若文件以 YAML 文档标记开头，则插在标记后）。
+// 返回是否真的改了。写盘走临时文件 + 原子 rename——这是运维者的活配置，不能留半截。替换后先把新文本解析回验一遍：行级替换够不着的
+// 写法（JSON 单行、多行标量……）解析失败或读不回目标值就拒绝写、原文件不动。版本号停在旧值
+// 只是页头显示问题，写坏配置是起不来。
+func WriteVersion(path, version string) (bool, error) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false, nil
+	}
+	if len(version) > 64 || !versionValuePattern.MatchString(version) {
+		return false, fmt.Errorf("版本号不合法：%q", version)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false, err
+	}
+	path = resolved
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	lines := strings.Split(string(data), "\n")
+	replaced := false
+	for i, line := range lines {
+		if topVersionKey(line) {
+			lines[i] = `version: "` + version + `"`
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		versionLine := `version: "` + version + `"`
+		insertAt := 0
+		for i, line := range lines {
+			if yamlDocumentStart(line) {
+				insertAt = i + 1
+				break
+			}
+			trimmed := strings.TrimSpace(strings.TrimPrefix(line, "\uFEFF"))
+			if trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(line, "%") {
+				break
+			}
+		}
+		lines = append(lines[:insertAt], append([]string{versionLine}, lines[insertAt:]...)...)
+	}
+	out := strings.Join(lines, "\n")
+	if out == string(data) {
+		return false, nil
+	}
+	if got, err := parseTopVersion([]byte(out)); err != nil || got != version {
+		return false, fmt.Errorf("version 的写法无法就地替换（改后配置解析失败或读回为 %q），已放弃写入，原文件未改动", got)
+	}
+	// Reading back version alone is insufficient: inserting before an inline
+	// document marker can create a new first document and hide every setting.
+	var originalSettings, nextSettings map[string]interface{}
+	if err := yaml.Unmarshal(data, &originalSettings); err != nil {
+		return false, err
+	}
+	if err := yaml.Unmarshal([]byte(out), &nextSettings); err != nil {
+		return false, err
+	}
+	delete(originalSettings, "version")
+	delete(nextSettings, "version")
+	if len(originalSettings) != len(nextSettings) || (len(originalSettings) > 0 && !reflect.DeepEqual(originalSettings, nextSettings)) {
+		return false, fmt.Errorf("版本号写入会改变其它配置，已放弃写入，原文件未改动")
+	}
+	if err := writeVersionFile(path, []byte(out), info.Mode().Perm()); err != nil {
+		return false, err
+	}
+	return true, nil
+
+}
+
+// RemoveVersion undoes a version field added by an update to an unversioned
+// configuration. All other settings and the file's permissions stay intact.
+func RemoveVersion(path string) (bool, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false, err
+	}
+	path = resolved
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if !topVersionKey(line) {
+			continue
+		}
+		out := strings.Join(append(lines[:i], lines[i+1:]...), "\n")
+		var before, after map[string]interface{}
+		if err := yaml.Unmarshal(data, &before); err != nil {
+			return false, err
+		}
+		if err := yaml.Unmarshal([]byte(out), &after); err != nil {
+			return false, err
+		}
+		delete(before, "version")
+		if _, present := after["version"]; present || len(before) != len(after) || (len(before) > 0 && !reflect.DeepEqual(before, after)) {
+			return false, fmt.Errorf("无法安全移除版本号，原配置未改动")
+		}
+		if err := writeVersionFile(path, []byte(out), info.Mode().Perm()); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func writeVersionFile(path string, data []byte, mode os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".version-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 func EnsureLocalConfig(path string) (EnsureLocalConfigResult, error) {

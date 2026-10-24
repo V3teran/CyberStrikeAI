@@ -65,6 +65,73 @@ func (m *turnLoopBlockingModel) snapshotInputs() [][]*schema.Message {
 	return out
 }
 
+// turnLoopHangingStreamModel emits one stream chunk then blocks until the
+// agent cancel scope ends. That matches production ChatModel streams that
+// receive ErrStreamCanceled when TurnLoop preempt escalates to CancelImmediate.
+type turnLoopHangingStreamModel struct {
+	started chan struct{}
+	mu      sync.Mutex
+	inputs  [][]*schema.Message
+}
+
+func newTurnLoopHangingStreamModel() *turnLoopHangingStreamModel {
+	return &turnLoopHangingStreamModel{started: make(chan struct{}, 8)}
+}
+
+func (m *turnLoopHangingStreamModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	sr, err := m.Stream(ctx, input, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer sr.Close()
+	var last *schema.Message
+	for {
+		msg, rerr := sr.Recv()
+		if rerr != nil {
+			if last != nil {
+				return last, nil
+			}
+			return nil, rerr
+		}
+		if msg != nil {
+			last = msg
+		}
+	}
+}
+
+func (m *turnLoopHangingStreamModel) Stream(ctx context.Context, input []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	m.mu.Lock()
+	m.inputs = append(m.inputs, cloneSchemaMessages(input))
+	callNo := len(m.inputs)
+	m.mu.Unlock()
+
+	select {
+	case m.started <- struct{}{}:
+	default:
+	}
+
+	if callNo == 1 {
+		reader, writer := schema.Pipe[*schema.Message](1)
+		go func() {
+			writer.Send(schema.AssistantMessage("partial", nil), nil)
+			<-ctx.Done()
+			writer.Close()
+		}()
+		return reader, nil
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{schema.AssistantMessage("done", nil)}), nil
+}
+
+func (m *turnLoopHangingStreamModel) snapshotInputs() [][]*schema.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([][]*schema.Message, len(m.inputs))
+	for i := range m.inputs {
+		out[i] = cloneSchemaMessages(m.inputs[i])
+	}
+	return out
+}
+
 func TestEinoTurnLoopRuntimePushInterruptStartsNextTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -116,6 +183,9 @@ func TestEinoTurnLoopRuntimePushInterruptStartsNextTurn(t *testing.T) {
 		t.Fatalf("first input = %q, want initial task", got)
 	}
 	lastInput := inputs[len(inputs)-1]
+	if len(lastInput) < 2 || lastInput[0].Content != "initial task" {
+		t.Fatalf("initial history lost after preempt: %#v", lastInput)
+	}
 	if len(lastInput) == 0 || !strings.Contains(lastInput[len(lastInput)-1].Content, "focus on ssh") {
 		t.Fatalf("last input = %#v, want interrupt note", lastInput)
 	}

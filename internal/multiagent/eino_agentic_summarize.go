@@ -10,7 +10,6 @@ import (
 	"cyberstrike-ai/internal/config"
 	"cyberstrike-ai/internal/database"
 
-	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/middlewares/summarization"
 	"github.com/cloudwego/eino/components/model"
@@ -29,6 +28,7 @@ func newEinoAgenticSummarizationMiddleware(
 	db *database.DB,
 	projectID string,
 	logger *zap.Logger,
+	memoryScopes ...string,
 ) (adk.TypedChatModelAgentMiddleware[*schema.AgenticMessage], error) {
 	if summaryModel == nil || appCfg == nil {
 		return nil, fmt.Errorf("multiagent: agentic summarization 需要 model 与配置")
@@ -91,11 +91,15 @@ func newEinoAgenticSummarizationMiddleware(
 		summaryInputMax = 4096
 	}
 
+	memoryScope := summarizationMemoryScope(memoryScopes)
 	transcriptPath := ""
 	if conv := strings.TrimSpace(conversationID); conv != "" {
-		baseRoot := filepath.Join(os.TempDir(), "cyberstrike-summarization")
+		baseRoot := filepath.Join(os.TempDir(), "cyberstrike-summarization", sanitizeEinoPathSegment(conv), "summarization")
 		if dbPath := strings.TrimSpace(appCfg.Database.Path); dbPath != "" {
 			baseRoot = filepath.Join(filepath.Dir(dbPath), "conversation_artifacts", sanitizeEinoPathSegment(conv), "summarization")
+		}
+		if memoryScope != "main" {
+			baseRoot = filepath.Join(baseRoot, "scopes", summarizationScopeID(memoryScope))
 		}
 		base := baseRoot
 		if abs, err := filepath.Abs(base); err == nil {
@@ -109,12 +113,10 @@ func newEinoAgenticSummarizationMiddleware(
 	retryPolicy := einoTransientRunRetryPolicyFromMW(mwCfg)
 	retryMax := retryPolicy.maxAttempts
 	var summaryOverflowRetries int
-	summaryModelOpts := []model.Option{
-		einoopenai.WithMaxCompletionTokens(outputReserve),
-	}
+	summaryModelOpts := newEinoSummarizationModelOptions(outputReserve, modelName, "agentic", &appCfg.OpenAI, logger)
 
 	mw, err := summarization.NewTyped[*schema.AgenticMessage](ctx, &summarization.TypedConfig[*schema.AgenticMessage]{
-		Model:        summaryModel,
+		Model:        newNonEmptyAgenticSummaryModel(summaryModel),
 		ModelOptions: summaryModelOpts,
 		GenModelInput: func(ctx context.Context, sysInstruction, userInstruction *schema.AgenticMessage, originalMsgs []*schema.AgenticMessage) ([]*schema.AgenticMessage, error) {
 			classicOriginal := AgenticMessagesToEino(originalMsgs)
@@ -168,7 +170,8 @@ func newEinoAgenticSummarizationMiddleware(
 		TokenCounter:       agenticTokenCounter,
 		UserInstruction:    einoSummarizeUserInstruction,
 		EmitInternalEvents: emitInternalEvents,
-		TranscriptFilePath: transcriptPath,
+		// Finalize advertises only a successfully written immutable snapshot.
+		TranscriptFilePath: "",
 		Retry: &summarization.TypedRetryConfig[*schema.AgenticMessage]{
 			MaxRetries: &retryMax,
 			ShouldRetry: func(_ context.Context, _ *schema.AgenticMessage, err error) bool {
@@ -198,15 +201,14 @@ func newEinoAgenticSummarizationMiddleware(
 				return nil, fmt.Errorf("agentic summarization returned empty summary")
 			}
 			compactionMessages := stripOriginalUserIntentLedgerFromMessages(classicOriginal)
-			defaultFinalized, derr := summarization.DefaultFinalize(ctx, compactionMessages, classicSummary)
+			defaultFinalized, derr := summarization.DefaultFinalize(ctx, summarizationDefaultFinalizeInput(compactionMessages, classicOriginal), classicSummary)
 			if derr != nil {
 				return nil, derr
 			}
 			if len(defaultFinalized) == 0 {
 				return nil, fmt.Errorf("agentic summarization default finalize returned no messages")
 			}
-			summaryMsg := appendTranscriptPathToSummarizationMessage(defaultFinalized[len(defaultFinalized)-1], transcriptPath)
-			summaryMsg = stripAnalysisFromSummarizationMessage(summaryMsg)
+			summaryMsg := finalizeSummarizationMemory(defaultFinalized[len(defaultFinalized)-1], classicOriginal, transcriptPath, db, projectID, conversationID, memoryScope, appCfg.Project, logger)
 			userLedger := buildOriginalUserIntentLedgerMessage(classicOriginal, userLedgerMaxRunes, userLedgerEntryMaxRunes)
 			out, ferr := summarizeFinalizeWithRecentAssistantToolTrail(ctx, compactionMessages, summaryMsg, classicTokenCounter, recentTrailMax)
 			if ferr != nil {
@@ -214,7 +216,7 @@ func newEinoAgenticSummarizationMiddleware(
 			}
 			out = mergeMessageIntoLeadingSystem(out, userLedger)
 			if appCfg != nil {
-				out = refreshFactIndexInMessages(out, db, projectID, appCfg.Project, logger)
+				out = refreshFactIndexInMessages(out, db, projectID, appCfg.Project, logger, conversationID)
 			}
 			return EinoMessagesToAgentic(out), nil
 		},

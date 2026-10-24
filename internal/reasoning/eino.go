@@ -36,7 +36,8 @@ func ApplyPlanExecutePlannerModelConfig(cfg *einoopenai.ChatModelConfig, oa *con
 	}
 	mergeExtraRequestFields(cfg, oa.Reasoning.ExtraRequestFields)
 	clearReasoningFromChatModelConfig(cfg)
-	if resolveWireProfile(oa, &oa.Reasoning) == wireDeepseek || oa.IsDeepSeekEndpointOrModel() {
+	applyOpenAIReasoningDisabled(cfg, oa)
+	if resolveWireProfile(oa, &oa.Reasoning) == wireDeepseek {
 		// DeepSeek enables thinking by default, so omission would not actually
 		// disable it for the planner's forced tool-choice requests.
 		applyThinkingDisabled(cfg)
@@ -78,7 +79,7 @@ func ApplyToEinoChatModelConfig(cfg *einoopenai.ChatModelConfig, oa *config.Open
 	}
 	sr := &oa.Reasoning
 	allowClient := sr.AllowClientReasoningEffective()
-	mode := effectiveMode(sr, client, allowClient)
+	mode := effectiveModeForModel(oa, client)
 
 	// Admin-defined root fields are independent of the selected reasoning wire
 	// profile. Merge them first so mode=off can remove only reasoning controls
@@ -86,18 +87,19 @@ func ApplyToEinoChatModelConfig(cfg *einoopenai.ChatModelConfig, oa *config.Open
 	mergeExtraRequestFields(cfg, sr.ExtraRequestFields)
 	if mode == "off" {
 		clearReasoningFromChatModelConfig(cfg)
+		applyOpenAIReasoningDisabled(cfg, oa)
 		// Strict OpenAI endpoints reject unknown `thinking` fields, whereas the
 		// DeepSeek API enables thinking by default and requires an explicit
-		// thinking.type=disabled switch. Detect the actual DeepSeek target even
-		// when the configured reasoning profile was left as openai_compat.
-		if resolveWireProfile(oa, sr) == wireDeepseek || oa.IsDeepSeekEndpointOrModel() {
+		// thinking.type=disabled switch. The configured profile is authoritative;
+		// auto-detection only happens inside resolveWireProfile for profile=auto.
+		if resolveWireProfile(oa, sr) == wireDeepseek {
 			applyThinkingDisabled(cfg)
 		}
 		return
 	}
 
-	// Claude (Anthropic): merge admin extras first; optional extended thinking maps to top-level `thinking`
-	// (see internal/openai convertOpenAIToClaude). DeepSeek/OpenAI-style fields are not sent.
+	// Claude (Anthropic): merge admin extras first; optional extended thinking maps to top-level `thinking`.
+	// DeepSeek/OpenAI-style fields are not sent.
 	if strings.EqualFold(strings.TrimSpace(oa.Provider), "claude") ||
 		strings.EqualFold(strings.TrimSpace(oa.Provider), "anthropic") {
 		applyClaudeExtendedThinking(cfg, mode, effectiveEffort(sr, client, allowClient), oa.Model)
@@ -128,17 +130,17 @@ func AgenticOpenAIExtraFields(oa *config.OpenAIConfig, client *ClientIntent) map
 	}
 	sr := &oa.Reasoning
 	allowClient := sr.AllowClientReasoningEffective()
-	mode := effectiveMode(sr, client, allowClient)
+	mode := effectiveModeForModel(oa, client)
 	fields := cloneExtraRequestFields(sr.ExtraRequestFields)
 	if mode == "off" {
 		clearReasoningExtraFields(fields)
-		if resolveWireProfile(oa, sr) == wireDeepseek || oa.IsDeepSeekEndpointOrModel() {
+		if resolveWireProfile(oa, sr) == wireDeepseek {
 			if fields == nil {
 				fields = make(map[string]any)
 			}
 			fields["thinking"] = map[string]any{"type": "disabled"}
 		}
-		return fields
+		return openAIReasoningDisabledFields(fields, oa)
 	}
 	if strings.EqualFold(strings.TrimSpace(oa.Provider), "claude") ||
 		strings.EqualFold(strings.TrimSpace(oa.Provider), "anthropic") {
@@ -194,7 +196,8 @@ func AgenticOpenAIPlannerExtraFields(oa *config.OpenAIConfig) map[string]any {
 	}
 	fields := cloneExtraRequestFields(oa.Reasoning.ExtraRequestFields)
 	clearReasoningExtraFields(fields)
-	if resolveWireProfile(oa, &oa.Reasoning) == wireDeepseek || oa.IsDeepSeekEndpointOrModel() {
+	fields = openAIReasoningDisabledFields(fields, oa)
+	if resolveWireProfile(oa, &oa.Reasoning) == wireDeepseek {
 		if fields == nil {
 			fields = make(map[string]any)
 		}

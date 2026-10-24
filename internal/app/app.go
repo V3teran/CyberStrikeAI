@@ -33,6 +33,8 @@ import (
 	"cyberstrike-ai/internal/robot"
 	"cyberstrike-ai/internal/security"
 	"cyberstrike-ai/internal/skillpackage"
+	"cyberstrike-ai/internal/storage"
+	"cyberstrike-ai/internal/toolguard"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -71,11 +73,16 @@ type App struct {
 	c2Watchdog         *c2.SessionWatchdog       // C2 会话看门狗
 	c2WatchdogCancel   context.CancelFunc        // 看门狗取消函数
 	c2Handler          *handler.C2Handler        // C2 REST（与 Manager 生命周期同步）
+	storageHandler     *handler.StorageHandler   // 运行空间占用统计与垃圾清理
 	auditSvc           *audit.Service
 }
 
 // New 创建新应用
 func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error) {
+	toolGuard, err := toolguard.NewManager(cfg.EffectiveToolGuard())
+	if err != nil {
+		return nil, fmt.Errorf("初始化调用拦截规则: %w", err)
+	}
 	if err := multiagent.InitADK(); err != nil {
 		return nil, fmt.Errorf("初始化 Eino ADK: %w", err)
 	}
@@ -147,6 +154,7 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 	// 创建MCP服务器（带数据库持久化）
 	mcpServer := mcp.NewServerWithStorage(log.Logger, db)
 	mcpServer.SetToolAuthorizer(mcpToolAuthorizer(db))
+	mcpServer.SetToolGuard(toolGuard)
 	mcpServer.ConfigureHTTPToolCallTimeoutFromAgentMinutes(cfg.Agent.ToolTimeoutMinutes)
 	mcpServer.ConfigureToolWaitTimeoutSeconds(cfg.Agent.ToolWaitTimeoutSeconds)
 	mcpServer.ConfigureToolResultMaxBytes(cfg.MultiAgent.EinoMiddleware.ReductionMaxLengthForTruncEffective())
@@ -170,6 +178,7 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 	// 创建外部MCP管理器（使用与内部MCP服务器相同的存储）
 	externalMCPMgr := mcp.NewExternalMCPManagerWithStorage(log.Logger, db)
 	externalMCPMgr.SetToolAuthorizer(externalMCPToolAuthorizer())
+	externalMCPMgr.SetToolGuard(toolGuard)
 	externalMCPMgr.ConfigureToolWaitTimeoutSeconds(cfg.Agent.ToolWaitTimeoutSeconds)
 	externalMCPMgr.ConfigureToolResultMaxBytes(cfg.MultiAgent.EinoMiddleware.ReductionMaxLengthForTruncEffective())
 	externalMCPMgr.ConfigureToolResultSpillRoot(cfg.MultiAgent.EinoMiddleware.ReductionRootDir)
@@ -360,6 +369,48 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 	reductionRoot := strings.TrimSpace(cfg.MultiAgent.EinoMiddleware.ReductionRootDir)
 	workspaceRoot := strings.TrimSpace(cfg.Agent.WorkspaceRootDir)
 	db.SetEinoConversationDirs(plantaskBase, checkpointBase, reductionRoot, workspaceRoot)
+
+	// 运行空间垃圾清理：根目录一律复用上面已解析好的同一批值，
+	// 避免在 storage 包内重新推导导致「清理的目录」与「实际写入的目录」不一致。
+	workspaceRootDir := strings.TrimSpace(workspaceRoot)
+	if workspaceRootDir == "" {
+		workspaceRootDir = filepath.Join("tmp", "workspace")
+	}
+	reductionRootDir := strings.TrimSpace(reductionRoot)
+	if reductionRootDir == "" {
+		reductionRootDir = filepath.Join("tmp", "reduction")
+	}
+	diagnosticLogDir := strings.TrimSpace(cfg.Log.DiagnosticDir)
+	if diagnosticLogDir == "" {
+		diagnosticLogDir = "log"
+	}
+	// chat_uploads 与 tmp/c2 目前均为相对进程工作目录的固定路径
+	// （见 handler.chatUploadsRootDirName 与 app/c2_lifecycle.go 的 c2.NewManager）。
+	chatUploadsRoot := "chat_uploads"
+	c2Root := filepath.Join("tmp", "c2")
+	// 让 DeleteConversation 一并删除上传附件：其 chat_upload_artifacts 行已由
+	// ON DELETE CASCADE 清除，此前磁盘文件会永久残留。
+	db.SetChatUploadsDir(chatUploadsRoot)
+	storageCleaner := storage.NewCleaner(storage.Options{
+		Config: cfg,
+		Paths: storage.Paths{
+			Workspace:            workspaceRootDir,
+			Reduction:            reductionRootDir,
+			ConversationArtifact: db.ConversationArtifactsBaseDir(),
+			Plantask:             plantaskBase,
+			C2:                   c2Root,
+			ChatUploads:          chatUploadsRoot,
+			WorkflowCheckpoints:  filepath.Join(filepath.Dir(dbPath), "workflow-checkpoints"),
+			DiagnosticLogs:       diagnosticLogDir,
+		},
+		Activity: db,
+		Logger:   log.Logger,
+	})
+	storageService := storage.NewService(storageCleaner, cfg, log.Logger)
+	storage.StartRetentionLoop(storageService, log.Logger)
+	storageHandler := handler.NewStorageHandler(storageCleaner, cfg, log.Logger)
+	storageHandler.SetAudit(auditSvc)
+
 	agent.SetPromptBaseDir(configDir)
 
 	agentsDir := cfg.AgentsDir
@@ -391,11 +442,11 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 	monitorHandler.SetTaskManager(agentHandler.TaskManager())
 	monitorHandler.SetAgentHandler(agentHandler)
 	notificationHandler := handler.NewNotificationHandler(db, agentHandler, log.Logger)
-	groupHandler := handler.NewGroupHandler(db, log.Logger)
 	authHandler := handler.NewAuthHandler(authManager, cfg, configPath, log.Logger)
 	authHandler.SetAudit(auditSvc)
 	attackChainHandler := handler.NewAttackChainHandler(db, &cfg.OpenAI, log.Logger)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(db, log.Logger)
+	vulnerabilityHandler.SetTaskStateProvider(agentHandler)
 	assetHandler := handler.NewAssetHandler(db, log.Logger)
 	projectHandler := handler.NewProjectHandler(db, log.Logger)
 	rbacHandler := handler.NewRBACHandler(db, log.Logger)
@@ -413,6 +464,7 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 	registerWebshellManagementTools(mcpServer, db, webshellHandler, log.Logger)
 	configHandler := handler.NewConfigHandler(configPath, cfg, mcpServer, executor, agent, attackChainHandler, externalMCPMgr, log.Logger)
 	configHandler.SetDB(db)
+	configHandler.SetToolGuard(toolGuard)
 	configHandler.SetAudit(auditSvc)
 	agentHandler.SetHitlToolWhitelistSaver(configHandler)
 	agentHandler.SetHitlAuditStrategySaver(configHandler)
@@ -420,6 +472,7 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 	externalMCPHandler := handler.NewExternalMCPHandler(externalMCPMgr, cfg, configPath, log.Logger)
 	externalMCPHandler.SetAudit(auditSvc)
 	roleHandler := handler.NewRoleHandler(cfg, configPath, log.Logger)
+	roleHandler.SetDB(db)
 	roleHandler.SetAudit(auditSvc)
 	skillsHandler := handler.NewSkillsHandler(cfg, configPath, log.Logger)
 	skillsHandler.SetAudit(auditSvc)
@@ -472,6 +525,7 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 		c2Watchdog:         c2Watchdog,
 		c2WatchdogCancel:   watchdogCancel,
 		c2Handler:          c2Handler,
+		storageHandler:     storageHandler,
 		auditSvc:           auditSvc,
 	}
 	// 飞书/钉钉长连接（无需公网），启用时在后台启动；后续前端应用配置时会通过 RestartRobotConnections 重启
@@ -557,6 +611,15 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 		return nil
 	})
 
+	// The one-click update acts on this installation's own tree, rooted where the live config
+	// file is. Its restart hook exits after a graceful shutdown, which is only "a restart" when
+	// something supervises the process - so the endpoint reports whether it is standing down or
+	// whether somebody has to start it again, instead of promising a boot that may not happen.
+	updateHandler := handler.NewUpdateHandler(configDir, log.Logger, auditSvc, func() {
+		app.Shutdown()
+		os.Exit(0)
+	}, configHandler.UpdateSource, configHandler.SetUpdateSource)
+
 	// 设置路由（使用 App 实例以便动态获取 handler）
 	setupRoutes(
 		router,
@@ -567,7 +630,6 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 		conversationHandler,
 		robotHandler,
 		wechatRobotHandler,
-		groupHandler,
 		configHandler,
 		externalMCPHandler,
 		attackChainHandler,
@@ -590,6 +652,7 @@ func New(cfg *config.Config, log *logger.Logger, configPath string) (*App, error
 		mcpServer,
 		authManager,
 		openAPIHandler,
+		updateHandler,
 	)
 
 	return app, nil
@@ -739,6 +802,9 @@ func (a *App) RunWithContext(ctx context.Context) error {
 
 // Shutdown 关闭应用
 func (a *App) Shutdown() {
+	if a.agentHandler != nil {
+		a.agentHandler.ShutdownTasks()
+	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = einoobserve.ShutdownOtel(shutdownCtx)
 	shutdownCancel()
@@ -870,7 +936,6 @@ func setupRoutes(
 	conversationHandler *handler.ConversationHandler,
 	robotHandler *handler.RobotHandler,
 	wechatRobotHandler *handler.WechatRobotHandler,
-	groupHandler *handler.GroupHandler,
 	configHandler *handler.ConfigHandler,
 	externalMCPHandler *handler.ExternalMCPHandler,
 	attackChainHandler *handler.AttackChainHandler,
@@ -893,6 +958,7 @@ func setupRoutes(
 	mcpServer *mcp.Server,
 	authManager *security.AuthManager,
 	openAPIHandler *handler.OpenAPIHandler,
+	updateHandler *handler.UpdateHandler,
 ) {
 	// API路由
 	api := router.Group("/api")
@@ -960,6 +1026,10 @@ func setupRoutes(
 
 		// Eino ADK 单代理（ChatModelAgent + Runner；不依赖 multi_agent.enabled）
 		protected.POST("/eino-agent", agentHandler.EinoSingleAgentLoop)
+		protected.POST("/eino-agent/runs", agentHandler.SubmitSingleAgentRun)
+		protected.POST("/multi-agent/runs", agentHandler.SubmitMultiAgentRun)
+		protected.GET("/eino-agent/runs/:runId", agentHandler.GetAgentRun)
+		protected.GET("/multi-agent/runs/:runId", agentHandler.GetAgentRun)
 		protected.POST("/eino-agent/stream", agentHandler.EinoSingleAgentLoopStream)
 		protected.GET("/hitl/pending", agentHandler.ListHITLPending)
 		protected.GET("/hitl/logs", agentHandler.ListHITLLogs)
@@ -972,6 +1042,8 @@ func setupRoutes(
 		protected.GET("/hitl/tool-whitelist", agentHandler.GetHITLGlobalToolWhitelist)
 		protected.PUT("/hitl/tool-whitelist", agentHandler.SetHITLGlobalToolWhitelist)
 		protected.POST("/hitl/tool-whitelist", agentHandler.MergeHITLGlobalToolWhitelist)
+		protected.GET("/hitl/default-config", agentHandler.GetHITLDefaultConfig)
+		protected.PUT("/hitl/default-config", agentHandler.UpdateHITLDefaultConfig)
 		protected.GET("/hitl/default-reviewer", agentHandler.GetHITLDefaultReviewer)
 		protected.PUT("/hitl/default-reviewer", agentHandler.UpdateHITLDefaultReviewer)
 		protected.GET("/hitl/audit-strategy", agentHandler.GetHITLAuditStrategy)
@@ -1027,9 +1099,11 @@ func setupRoutes(
 		protected.DELETE("/batch-tasks/:queueId/tasks/:taskId", agentHandler.DeleteBatchTask)
 
 		// 对话历史
+		protected.GET("/usage/tokens", conversationHandler.GetTokenUsageStats)
 		protected.POST("/conversations", conversationHandler.CreateConversation)
 		protected.GET("/conversations", conversationHandler.ListConversations)
 		protected.GET("/conversations/:id", conversationHandler.GetConversation)
+		protected.GET("/conversations/:id/token-usage", conversationHandler.GetConversationTokenUsageStats)
 		protected.GET("/conversations/:id/plan-tasks", conversationHandler.GetConversationPlanTasks)
 		protected.GET("/messages/:id/process-details", conversationHandler.GetMessageProcessDetails)
 		protected.GET("/process-details/:id", conversationHandler.GetProcessDetail)
@@ -1037,20 +1111,7 @@ func setupRoutes(
 		protected.PUT("/conversations/:id/project", conversationHandler.SetConversationProject)
 		protected.DELETE("/conversations/:id", conversationHandler.DeleteConversation)
 		protected.POST("/conversations/:id/delete-turn", conversationHandler.DeleteConversationTurn)
-		protected.PUT("/conversations/:id/pinned", groupHandler.UpdateConversationPinned)
-
-		// 对话分组
-		protected.POST("/groups", groupHandler.CreateGroup)
-		protected.GET("/groups", groupHandler.ListGroups)
-		protected.GET("/groups/:id", groupHandler.GetGroup)
-		protected.PUT("/groups/:id", groupHandler.UpdateGroup)
-		protected.DELETE("/groups/:id", groupHandler.DeleteGroup)
-		protected.PUT("/groups/:id/pinned", groupHandler.UpdateGroupPinned)
-		protected.GET("/groups/:id/conversations", groupHandler.GetGroupConversations)
-		protected.GET("/groups/mappings", groupHandler.GetAllMappings)
-		protected.POST("/groups/conversations", groupHandler.AddConversationToGroup)
-		protected.DELETE("/groups/:id/conversations/:conversationId", groupHandler.RemoveConversationFromGroup)
-		protected.PUT("/groups/:id/conversations/:conversationId/pinned", groupHandler.UpdateConversationPinnedInGroup)
+		protected.PUT("/conversations/:id/pinned", conversationHandler.UpdateConversationPinned)
 
 		// 监控
 		protected.GET("/monitor", monitorHandler.Monitor)
@@ -1066,13 +1127,27 @@ func setupRoutes(
 
 		// 配置管理
 		protected.GET("/config", configHandler.GetConfig)
+		protected.GET("/tool-guard", configHandler.GetToolGuard)
+		protected.PUT("/tool-guard", configHandler.UpdateToolGuard)
+		protected.POST("/tool-guard/test", configHandler.TestToolGuard)
 		protected.GET("/config/tools", configHandler.GetTools)
 		protected.GET("/config/tools/:name/schema", configHandler.GetToolSchema)
 		protected.PUT("/config", configHandler.UpdateConfig)
 		protected.POST("/config/apply", configHandler.ApplyConfig)
 		protected.POST("/config/test-openai", configHandler.TestOpenAI)
+		protected.POST("/config/test-typesafe", configHandler.TestTypeSafe)
 		protected.POST("/config/test-vision", configHandler.TestVision)
 		protected.POST("/config/list-models", configHandler.ListModels)
+
+		// 系统更新（保持本安装自身源码最新：查看、检查、应用、进度、回滚、接入、更新源）
+		protected.GET("/system/update", updateHandler.GetStatus)
+		protected.GET("/system/update/job", updateHandler.Job)
+		protected.POST("/system/update/check", updateHandler.Check)
+		protected.POST("/system/update/apply", updateHandler.Apply)
+		protected.POST("/system/update/restart", updateHandler.Restart)
+		protected.POST("/system/update/rollback", updateHandler.Rollback)
+		protected.POST("/system/update/adopt", updateHandler.Adopt)
+		protected.POST("/system/update/source", updateHandler.SaveSource)
 
 		// 系统设置 - 终端（执行命令，提高运维效率）
 		protected.POST("/terminal/run", terminalHandler.RunCommand)
@@ -1085,6 +1160,11 @@ func setupRoutes(
 		protected.GET("/audit/logs", auditHandler.ListLogs)
 		protected.GET("/audit/logs/export", auditHandler.ExportLogs)
 		protected.GET("/audit/logs/:id", auditHandler.GetLog)
+
+		// 运行空间占用与垃圾清理
+		protected.GET("/storage/meta", app.storageHandler.Meta)
+		protected.GET("/storage/status", app.storageHandler.Status)
+		protected.POST("/storage/cleanup", app.storageHandler.Cleanup)
 
 		// 外部MCP管理
 		protected.GET("/external-mcp", externalMCPHandler.GetExternalMCPs)
@@ -1254,6 +1334,7 @@ func setupRoutes(
 		protected.PUT("/vulnerability-alerts/subscription", vulnerabilityHandler.UpdateMyAlertSubscription)
 		protected.GET("/vulnerabilities/:id", vulnerabilityHandler.GetVulnerability)
 		protected.POST("/vulnerabilities", vulnerabilityHandler.CreateVulnerability)
+		protected.POST("/vulnerabilities/:id/retest", vulnerabilityHandler.CreateRetest)
 		protected.PUT("/vulnerabilities/:id", vulnerabilityHandler.UpdateVulnerability)
 		protected.DELETE("/vulnerabilities/:id", vulnerabilityHandler.DeleteVulnerability)
 

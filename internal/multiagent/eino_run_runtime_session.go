@@ -126,6 +126,9 @@ func (s *einoRunRuntimeSession) HandleRunError(runErr error) einoRunRuntimeError
 	if s == nil || runErr == nil {
 		return einoRunRuntimeErrorResult{}
 	}
+	if isEinoTurnLoopPreemptErr(s.ctx, runErr) {
+		return einoRunRuntimeErrorResult{}
+	}
 	restarted, fatal := s.maybeRestart(runErr)
 	if fatal != nil {
 		result, err := s.takePartial(fatal)
@@ -368,5 +371,9 @@ func (s *einoRunRuntimeSession) emitUsageSummary(reason string) bool {
 	if s == nil || s.usage == nil {
 		return false
 	}
-	return s.usage.EmitOnce(s.conversationID, s.orchMode, reason, s.progress, s.logger)
+	modelName := ""
+	if s.args != nil {
+		modelName = s.args.ModelName
+	}
+	return s.usage.EmitOnce(s.conversationID, s.orchMode, reason, modelName, s.progress, s.logger)
 }

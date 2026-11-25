@@ -1,0 +1,182 @@
+.cs-role-name-cell {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.cs-role-icon-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--semi-color-fill-0);
+    border: 1px solid var(--semi-color-border);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.cs-role-editor-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.cs-role-editor-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px;
+    gap: 12px;
+}
+
+.cs-role-editor-workflow-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 200px;
+    gap: 12px;
+}
+
+.cs-role-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cs-role-field-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--semi-color-text-0);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.cs-role-field-required::after {
+    content: ' *';
+    color: var(--semi-color-danger);
+}
+
+.cs-role-field-hint {
+    font-size: 12px;
+    color: var(--semi-color-text-2);
+}
+
+.cs-role-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--semi-color-fill-0);
+    border: 1px solid var(--semi-color-border);
+}
+
+.cs-role-icon-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cs-role-tools-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--semi-color-border);
+    background: var(--semi-color-bg-1);
+}
+
+.cs-role-tools-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.cs-role-tools-selected {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 92px;
+    overflow-y: auto;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--semi-color-fill-0);
+}
+
+.cs-role-tools-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.cs-role-tools-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--semi-color-border);
+    border-radius: 6px;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--semi-color-bg-0);
+}
+
+.cs-role-tool-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--semi-color-border);
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+
+.cs-role-tool-item:last-child {
+    border-bottom: none;
+}
+
+.cs-role-tool-item:hover {
+    background: var(--semi-color-fill-0);
+}
+
+.cs-role-tool-meta {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.cs-role-tool-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.cs-role-tool-desc {
+    font-size: 12px;
+    color: var(--semi-color-text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cs-role-tools-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+@media (max-width: 640px) {
+    .cs-role-editor-grid,
+    .cs-role-editor-workflow-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

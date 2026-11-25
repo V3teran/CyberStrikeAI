@@ -65,7 +65,7 @@ go build -o cyberstrike-ai ./cmd/server
 重点验证：
 
 - 登录。
-- `/api/eino-agent/stream`。
+- `/api/agent/stream`。
 - `/api/config`。
 - `/api/config/tools`。
 - `/api/knowledge/search`。
@@ -149,7 +149,7 @@ C2、WebShell、终端、批量任务只能在授权测试环境验证。测试�
 - `internal/multiagent/`：测流式、工具调用、摘要、重试、HITL。
 - `internal/security/`：测认证、Shell、超时、无输出。
 - `internal/database/`：测旧数据兼容。
-- `web/static/js/chat.js`：测对话、过程详情、攻击链、分组。
+- `web/frontend/src/pages/chat/`：测对话、过程详情、攻击链、分组。
 
 ## 测试数据管理
 

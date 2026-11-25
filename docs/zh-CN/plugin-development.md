@@ -98,7 +98,7 @@ Burp 插件目录包含 Java 源码和构建脚本。典型能力：
 
 - 先 `POST /api/auth/login`，再 `GET /api/auth/validate` 确认会话。
 - 保存 `expires_at`，过期后重新登录（无 silent refresh）。
-- 优先调用 `/api/eino-agent/stream` 或 `/api/multi-agent/stream`（SSE）。
+- 优先调用 `/api/agent/stream` 或 `/api/multi-agent/stream`（SSE）。
 - 大文件通过 `/api/chat-uploads` 上传，再在消息中引用。
 - 查询结果或漏洞可写入 `/api/vulnerabilities`。
 - 项目信息可写入 `/api/projects/:id/facts`。
@@ -213,4 +213,4 @@ schema 越具体，HITL 越容易判断风险，Agent 也越不容易发散。
   - 捕获：`devtools.js`、`background/service-worker.js`
 - OpenAPI：`internal/handler/openapi.go`
 - 外部 MCP：`internal/handler/external_mcp.go`
-- Web 端认证参考：`web/static/js/auth.js`
+- Web 端认证参考：`web/frontend/src/lib/auth.jsx`

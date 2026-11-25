@@ -207,6 +207,29 @@ func TestRBACProjectAndConversationListAccess(t *testing.T) {
 	if len(convs) != 1 || convs[0].ID != c1.ID {
 		t.Fatalf("conversations = %#v, want only %s", convs, c1.ID)
 	}
+
+	unbound, err := db.CreateConversation("visible workspace", ConversationCreateMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetResourceOwner("conversation", unbound.ID, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := db.ListConversationProjectGroups("visible", "u1", RBACScopeOwn)
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("groups = %#v, err = %v, want one project and the default workspace", groups, err)
+	}
+	totals := make(map[string]int)
+	for _, group := range groups {
+		totals[group.ProjectID] = group.Total
+	}
+	if totals[p1.ID] != 1 || totals[""] != 1 {
+		t.Fatalf("unexpected group totals: %#v", totals)
+	}
+	groups, err = db.ListConversationProjectGroups("conv", "u1", RBACScopeOwn)
+	if err != nil || len(groups) != 1 || groups[0].ProjectID != p1.ID || groups[0].Total != 1 {
+		t.Fatalf("groups filtered by search = %#v, err = %v", groups, err)
+	}
 }
 
 func TestRBACVulnerabilityAccessInheritsProject(t *testing.T) {
@@ -220,8 +243,8 @@ func TestRBACVulnerabilityAccessInheritsProject(t *testing.T) {
 	if err := db.AssignResourceToUser(user.ID, "project", p1.ID); err != nil {
 		t.Fatal(err)
 	}
-	v1, _ := db.CreateVulnerability(&Vulnerability{ProjectID: p1.ID, Title: "v1", Severity: "high"})
-	v2, _ := db.CreateVulnerability(&Vulnerability{ProjectID: p2.ID, Title: "v2", Severity: "high"})
+	v1, _ := db.CreateVulnerability(&Vulnerability{ProjectID: p1.ID, Title: "v1", Severity: "high", Target: "https://example.com/visible"})
+	v2, _ := db.CreateVulnerability(&Vulnerability{ProjectID: p2.ID, Title: "v2", Severity: "high", Target: "https://example.com/hidden"})
 
 	items, err := db.ListVulnerabilitiesForAccess(50, 0, VulnerabilityListFilter{}, RBACListAccess{UserID: user.ID, Scope: RBACScopeAssigned})
 	if err != nil {
@@ -229,6 +252,13 @@ func TestRBACVulnerabilityAccessInheritsProject(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ID != v1.ID {
 		t.Fatalf("vulnerabilities = %#v, want only %s; hidden %s", items, v1.ID, v2.ID)
+	}
+	for _, group := range []string{"host", "task"} {
+		access := RBACListAccess{UserID: user.ID, Scope: RBACScopeAssigned}
+		items, err := db.ListVulnerabilitiesByGroupForAccess(1, 0, VulnerabilityListFilter{}, access, group, "severity")
+		if err != nil || len(items) != 1 || items[0].ID != v1.ID {
+			t.Fatalf("group %s returned %#v, %v; want only %s", group, items, err, v1.ID)
+		}
 	}
 	if !db.UserCanAccessResource(user.ID, RBACScopeAssigned, "vulnerability", v1.ID) {
 		t.Fatalf("expected project assignment to allow vulnerability detail")
@@ -396,10 +426,10 @@ func TestRBACWebshellAndBatchListAccess(t *testing.T) {
 		t.Fatalf("unbound webshells = %#v, want only %s", webshells, ws4.ID)
 	}
 
-	if err := db.CreateBatchQueue("q_visible", "visible", "", "eino_single", "manual", "", nil, "", 1, []map[string]interface{}{{"id": "t1", "message": "a"}}); err != nil {
+	if err := db.CreateBatchQueue("q_visible", "visible", "", "single", "manual", "", nil, "", 1, []map[string]interface{}{{"id": "t1", "message": "a"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateBatchQueue("q_hidden", "hidden", "", "eino_single", "manual", "", nil, "", 1, []map[string]interface{}{{"id": "t2", "message": "b"}}); err != nil {
+	if err := db.CreateBatchQueue("q_hidden", "hidden", "", "single", "manual", "", nil, "", 1, []map[string]interface{}{{"id": "t2", "message": "b"}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.SetResourceOwner("batch_task", "q_visible", "u1")

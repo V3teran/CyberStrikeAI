@@ -4,13 +4,13 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	agentpkg "cyberstrike-ai/internal/agent"
 	"cyberstrike-ai/internal/agentfinalizer"
 	"cyberstrike-ai/internal/config"
 	"cyberstrike-ai/internal/database"
 	"cyberstrike-ai/internal/mcp"
+	"cyberstrike-ai/internal/multiagent"
 
 	"go.uber.org/zap"
 )
@@ -44,6 +44,14 @@ func TestShouldAutoContinueAfterFinalization(t *testing.T) {
 	if shouldAutoContinueAfterFinalization(awaitingHITL, 0) {
 		t.Fatal("awaiting HITL should not auto-continue without approval")
 	}
+
+	unfinishedPlan := agentfinalizer.Decision{
+		Status:           agentfinalizer.StatusBlocked,
+		CompletionReason: multiagent.ReasonUnfinishedPlan,
+	}
+	if shouldAutoContinueAfterFinalization(unfinishedPlan, 0) {
+		t.Fatal("an unfinished plan should not auto-continue")
+	}
 }
 
 func TestRequestRequiresExecutionEvidenceUsesExplicitPolicyOnly(t *testing.T) {
@@ -67,7 +75,7 @@ func TestRequestRequiresExecutionEvidenceUsesExplicitPolicyOnly(t *testing.T) {
 	}
 }
 
-func TestCleanupPendingToolExecutionsAfterIterationAllowsFinalization(t *testing.T) {
+func TestCleanupPendingToolsDoesNotCompleteRun(t *testing.T) {
 	logger := zap.NewNop()
 	db, err := database.NewDB(filepath.Join(t.TempDir(), "cleanup-finalization.db"), logger)
 	if err != nil {
@@ -93,18 +101,17 @@ func TestCleanupPendingToolExecutionsAfterIterationAllowsFinalization(t *testing
 		t.Fatalf("expected background wait result, result=%#v execID=%q", result, execID)
 	}
 
-	decision := agentfinalizer.Decide(db, agentfinalizer.Input{
-		Response:        "基于已完成信息的阶段性总结。",
-		MCPExecutionIDs: []string{execID},
-	})
-	if decision.CompletionReason != agentfinalizer.ReasonPendingTools {
-		t.Fatalf("decision reason = %s, want pending tools: %+v", decision.CompletionReason, decision)
-	}
-
+	run := &multiagent.RunResult{Response: "基于已完成信息的阶段性总结。", MCPExecutionIDs: []string{execID}}
 	var eventType string
-	cancelled := h.cleanupPendingToolExecutionsAfterIteration(context.Background(), "conv-cleanup", decision, func(et, _ string, _ interface{}) {
+	decision, cancelled := h.decideAgentRunForDeliveryAndCleanup(context.Background(), "conv-cleanup", "", "single", run, run.MCPExecutionIDs, false, func(et, _ string, _ interface{}) {
 		eventType = et
 	})
+	if decision.Finalizable || decision.Finalized || decision.Status != agentfinalizer.StatusBlocked || decision.CompletionReason != agentfinalizer.ReasonPendingToolsCancelled {
+		t.Fatalf("cancelled tools must keep the run incomplete: %+v", decision)
+	}
+	if run.Finalized || run.Status != agentfinalizer.StatusBlocked {
+		t.Fatalf("run status should match the decision: %+v", run)
+	}
 	if len(cancelled) != 1 || cancelled[0] != execID {
 		t.Fatalf("cancelled = %#v, want [%s]", cancelled, execID)
 	}
@@ -112,20 +119,8 @@ func TestCleanupPendingToolExecutionsAfterIterationAllowsFinalization(t *testing
 		t.Fatalf("event type = %q", eventType)
 	}
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		exec, err := db.GetToolExecution(execID)
-		if err == nil && exec != nil && exec.Status == mcp.ToolExecutionStatusCancelled {
-			after := agentfinalizer.Decide(db, agentfinalizer.Input{
-				Response:        "基于已完成信息的阶段性总结。",
-				MCPExecutionIDs: []string{execID},
-			})
-			if !after.Finalizable || !after.Finalized {
-				t.Fatalf("decision should finalize after cleanup: %+v", after)
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	execution, err := db.GetToolExecution(execID)
+	if err != nil || execution == nil || execution.Status != mcp.ToolExecutionStatusCancelled {
+		t.Fatalf("expected a cancelled execution, got %+v, err=%v", execution, err)
 	}
-	t.Fatal("execution did not become cancelled")
 }

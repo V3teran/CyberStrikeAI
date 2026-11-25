@@ -16,8 +16,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/cloudwego/eino/adk/filesystem"
 )
 
 func readTestPID(t *testing.T, path string) int {
@@ -76,7 +74,7 @@ func TestProcessScope_BackgroundSurvivesToolButEndsWithTask(t *testing.T) {
 	}
 }
 
-func TestProcessScope_EinoBackgroundReturnsPromptlyAndIsOwned(t *testing.T) {
+func TestProcessScope_AgentBackgroundReturnsPromptlyAndIsOwned(t *testing.T) {
 	for _, useFlag := range []bool{false, true} {
 		t.Run(fmt.Sprint(useFlag), func(t *testing.T) {
 			scope := NewProcessScope()
@@ -87,7 +85,7 @@ func TestProcessScope_EinoBackgroundReturnsPromptlyAndIsOwned(t *testing.T) {
 			if !useFlag {
 				command += " &"
 			}
-			stream, err := NewEinoStreamingShell().ExecuteStreaming(ctx, &filesystem.ExecuteRequest{Command: command, RunInBackendGround: useFlag})
+			stream, err := NewStreamingShell().ExecuteStreaming(ctx, &ShellExecuteRequest{Command: command, RunInBackendGround: useFlag})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -195,4 +193,20 @@ func TestProcessScope_ForegroundExitKillsLeftoverChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireProcessGone(t, pid)
+}
+
+func TestProcessScopeCleanupTimeoutConfiguration(t *testing.T) {
+	t.Setenv("CS_CLEANUP_GRACE", "125ms")
+	t.Setenv("CS_CLEANUP_KILL", "8s")
+	t.Setenv("CS_CLEANUP_GUARD", "10s")
+	scope := NewProcessScope()
+	if scope.graceTimeout != 125*time.Millisecond || scope.killTimeout != 8*time.Second || scope.guardTimeout != 10*time.Second {
+		t.Fatalf("unexpected cleanup waits: %v, %v, %v", scope.graceTimeout, scope.killTimeout, scope.guardTimeout)
+	}
+	for _, value := range []string{"", "invalid", "0s", "-1s"} {
+		t.Setenv("CS_CLEANUP_GRACE", value)
+		if got := NewProcessScope().graceTimeout; got != 3*time.Second {
+			t.Errorf("grace = %v with %q, want 3s", got, value)
+		}
+	}
 }

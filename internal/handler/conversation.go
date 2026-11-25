@@ -162,13 +162,18 @@ func (h *ConversationHandler) ListConversations(c *gin.Context) {
 
 	sortBy := strings.TrimSpace(c.Query("sort_by"))
 	session, _ := security.CurrentSession(c)
+	grouped := c.Query("group_by_project") == "1"
 
 	var conversations []*database.Conversation
+	var groups []database.ConversationProjectGroup
 	var total int
 	var err error
 	conversations, err = h.db.ListConversationsForAccess(limit, offset, search, sortBy, projectID, session.UserID, session.Scope)
 	if err == nil {
 		total, err = h.db.CountConversationsForAccess(search, projectID, session.UserID, session.Scope)
+	}
+	if err == nil && grouped {
+		groups, err = h.db.ListConversationProjectGroups(search, session.UserID, session.Scope)
 	}
 	if err != nil {
 		h.logger.Error("获取对话列表失败", zap.Error(err))
@@ -178,12 +183,16 @@ func (h *ConversationHandler) ListConversations(c *gin.Context) {
 	if conversations == nil {
 		conversations = []*database.Conversation{}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"conversations": conversations,
 		"total":         total,
 		"limit":         limit,
 		"offset":        offset,
-	})
+	}
+	if grouped {
+		response["projectGroups"] = groups
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // UpdateConversationPinnedRequest 更新对话置顶状态请求
@@ -524,7 +533,7 @@ func summarizeProcessDetailData(eventType string, data interface{}) interface{} 
 		"toolName": true, "toolCallId": true, "index": true, "total": true,
 		"arguments": true, "argumentsObj": true,
 		"success": true, "isError": true, "executionId": true,
-		"einoAgent": true, "einoRole": true, "einoScope": true, "orchestration": true,
+		"agentName": true, "agentRole": true, "agentScope": true, "orchestration": true,
 		"agentFacing": true,
 		"status":      true, "modelFacingIsError": true, "resultPreview": true,
 	}
@@ -625,6 +634,13 @@ func (h *ConversationHandler) DeleteConversationTurn(c *gin.Context) {
 	if _, err := h.db.GetConversation(conversationID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "对话不存在"})
 		return
+	}
+
+	if h.taskState != nil {
+		if running, _ := h.taskState.ConversationTaskRuntimeState(conversationID); running {
+			c.JSON(http.StatusConflict, gin.H{"error": "请先停止当前任务，再删除对话轮次"})
+			return
+		}
 	}
 
 	deletedIDs, err := h.db.DeleteConversationTurn(conversationID, req.MessageID)

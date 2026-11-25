@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"cyberstrike-ai/internal/agent"
+	"cyberstrike-ai/internal/agentruntime"
 	"cyberstrike-ai/internal/audit"
 	"cyberstrike-ai/internal/config"
 	"cyberstrike-ai/internal/database"
@@ -15,12 +16,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// multiAgentPrepared 多代理请求在调用 Eino 前的会话与消息准备结果。
+// multiAgentPrepared 多代理请求在调用 Agent 前的会话与消息准备结果。
 type multiAgentPrepared struct {
 	ConversationID     string
 	CreatedNew         bool
 	History            []agent.ChatMessage
 	FinalMessage       string
+	Images             []agentruntime.Image
 	RoleTools          []string
 	AssistantMessageID string
 	UserMessageID      string
@@ -30,7 +32,7 @@ func chatRequestAgentMode(req *ChatRequest, source string) string {
 	if strings.HasPrefix(strings.TrimSpace(source), "multi_agent") {
 		return config.NormalizeMultiAgentOrchestration(req.Orchestration)
 	}
-	return "eino_single"
+	return "single"
 }
 
 func (h *AgentHandler) prepareMultiAgentSession(req *ChatRequest, c *gin.Context, source string) (*multiAgentPrepared, error) {
@@ -179,11 +181,18 @@ func (h *AgentHandler) prepareMultiAgentSession(req *ChatRequest, c *gin.Context
 
 	var savedPaths []string
 	if len(req.Attachments) > 0 {
+		if err := h.authorizeChatAttachmentPaths(c, req.Attachments); err != nil {
+			return nil, err
+		}
 		var aerr error
 		savedPaths, aerr = saveAttachmentsToDateAndConversationDir(req.Attachments, conversationID, h.logger)
 		if aerr != nil {
 			return nil, fmt.Errorf("保存上传文件失败: %w", aerr)
 		}
+	}
+	images, err := loadChatImages(savedPaths)
+	if err != nil {
+		return nil, err
 	}
 	finalMessage = appendAttachmentsToMessage(finalMessage, req.Attachments, savedPaths)
 
@@ -216,6 +225,7 @@ func (h *AgentHandler) prepareMultiAgentSession(req *ChatRequest, c *gin.Context
 		CreatedNew:         createdNew,
 		History:            agentHistoryMessages,
 		FinalMessage:       finalMessage,
+		Images:             images,
 		RoleTools:          roleTools,
 		AssistantMessageID: assistantMessageID,
 		UserMessageID:      userMessageID,
